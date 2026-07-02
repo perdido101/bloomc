@@ -11,7 +11,9 @@ const page = await browser.newPage({ viewport: { width: 700, height: 700 } });
 page.on('pageerror', (err) => console.log('[pageerror]', String(err).slice(0, 300)));
 await page.goto(url);
 await page.waitForTimeout(2500);
-await page.mouse.click(350, 350);
+await page.click('#splash');
+await page.waitForTimeout(300);
+await page.click('#btnPlay');
 await page.waitForTimeout(600);
 
 const dbg = () => page.evaluate(() => {

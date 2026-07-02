@@ -1,8 +1,10 @@
 # BLOOM
 
-A high-score endless platformer played inside a living kaleidoscope. You are
-a glowing prism shard descending toward the eye of an ever-blooming mandala
-vortex — the only asymmetric thing on screen.
+A high-score endless maze-platformer played inside a living kaleidoscope.
+You are a comet wisp descending toward the eye of an ever-blooming mandala
+vortex — the only asymmetric thing on screen. Every ring is a rotating wall
+with one or two doorways; solid rings bounce your jumps back, so descending
+means reading the rotation and slipping through the aligned door.
 
 ## Play
 
@@ -15,7 +17,7 @@ npm test          # deterministic physics/scoring tests
 
 ### Controls — one thumb, no zones
 
-You are a neon stickman climber who **runs along the rings by himself**.
+You are a comet wisp that **runs along the rings by itself**.
 
 | Action | Touch | Desktop |
 | --- | --- | --- |
@@ -24,10 +26,11 @@ You are a neon stickman climber who **runs along the rings by himself**.
 | Flash-dash | swipe up | Shift |
 | Pause | ◈ glyph, top right | Esc |
 
-Gravity pulls **outward**. Jump inward, ring to ring. Land on the arcs;
-gaps drop you toward the rim; falling off the outermost ring ends the run.
-If a jump barely misses a platform, the climber **grabs the ledge** and
-pulls himself up — edges are your friends.
+Gravity pulls **outward**. Each ring is a near-solid wall with 1–2
+doorways (mirrored by the kaleidoscope): jump inward **through a door** —
+solid undersides bounce you back. Doors are also holes under your feet, so
+mind the drop; falling off the outermost ring ends the run. A jump that
+barely misses a door edge **grabs it** and pulls you up.
 Skim a ring (land and leave within 0.5 s) to build your combo (up to ×8).
 
 The world **Blooms** on an accelerating schedule (45 s shrinking to 18 s):
@@ -72,9 +75,9 @@ DNA as JSON.
   rule-breakers). Palettes are IQ cosine gradients evaluated to a LUT on
   the CPU each frame (`render/palette.ts`) with enforced luminance bounds
   and a ≥3:1 hazard/platform contrast invariant.
-- The climber is a procedurally animated stick figure (run cycle, tuck,
-  flail, hang-and-pull-up, dash stretch) drawn as layered capsules — dark
-  silhouette under a white-hot core so he reads over every palette.
+- The comet wisp avatar is layered light shapes (dark backdrop teardrop,
+  palette halo, white streak + hot core) that stretch with motion, squash
+  on landings and bounces, and cling during ledge grabs.
 
 ## Textures (placeholder system)
 

@@ -96,14 +96,14 @@ void main() {
       float shapeHalf = 1.0;
       float coreLine = 0.0;
       if (uPlatStyle > 0.5 && uPlatStyle < 1.5) {
-        // petal: soft bulge along the arc
-        shapeHalf = 0.45 + 0.65 * sin(3.14159 * clamp(fArc, 0.0, 1.0));
+        // petal: soft bulge along the wall (kept chunky — walls must read)
+        shapeHalf = 0.72 + 0.28 * sin(3.14159 * clamp(fArc, 0.0, 1.0));
       } else if (uPlatStyle < 2.5 && uPlatStyle > 1.5) {
         // wave: undulating edges
-        shapeHalf = 0.75 + 0.25 * sin(fArc * 18.85 + uTime * 1.4);
+        shapeHalf = 0.82 + 0.18 * sin(fArc * 18.85 + uTime * 1.4);
       } else if (uPlatStyle > 2.5) {
-        // filament: thin band with a bright core line
-        shapeHalf = 0.5;
+        // filament: leaner wall with a bright core line
+        shapeHalf = 0.7;
         coreLine = exp(-rr * rr * 22.0) * 0.9;
       }
       float shaped = plat * (1.0 - smoothstep(shapeHalf - 0.14, shapeHalf, abs(rr)));

@@ -13,7 +13,7 @@ import {
 import { generateDNA } from '../src/game/phases';
 import { Scoring } from '../src/game/scoring';
 
-const GEN: WorldGen = { gapScale: 1, hazardDensity: 1, tier: 0, layoutStyle: 'even-gaps' };
+const GEN: WorldGen = { gapScale: 1, hazardDensity: 1, tier: 0, layoutStyle: 'even-gaps', wedge: Math.PI / 4 };
 
 let failures = 0;
 function check(name: string, cond: boolean): void {
@@ -56,18 +56,37 @@ function step(shard: Shard, input: FakeInput, field: RingField, seconds: number,
   for (let i = 0; i < n; i++) shard.update(DT, input as unknown as Input, field, WEDGE, 1, ev);
 }
 
-// ---- 1. a plain jump clears one ring spacing ----
+// ---- 1. a jump through an open door lands on the next ring ----
 {
-  const field = makeField(() => 1); // platforms everywhere
+  // ring 1's door is open while rising, closed (solid floor) while falling —
+  // the classic timed pass through a rotating doorway
   const shard = new Shard();
   shard.reset();
+  const field = makeField((k) => (k === 1 ? (shard.vel > 0 ? 0 : 1) : 1));
   const input = new FakeInput();
   input.jump = true;
   let landed = -1;
   step(shard, input, field, 2, { onLand: (k) => (landed = k) });
-  check('plain jump reaches the next inner ring', landed === 1);
+  check('jump through an open door lands on the next inner ring', landed === 1);
   const apex = (TUNING.JUMP_IMPULSE * TUNING.JUMP_IMPULSE) / (2 * TUNING.GRAVITY_OUT);
   check('jump apex clears one ring spacing', apex > TUNING.RING_SPACING);
+}
+
+// ---- 1b. the maze blocks: solid undersides bounce you back ----
+{
+  const field = makeField(() => 1); // fully solid ring above
+  const shard = new Shard();
+  shard.reset();
+  const input = new FakeInput();
+  input.jump = true;
+  let bounced = -1;
+  let landedBack = -1;
+  step(shard, input, field, 2, {
+    onBounce: (k) => (bounced = k),
+    onLand: (k) => (landedBack = k),
+  });
+  check('jumping into a solid ring bounces off its underside', bounced === 1);
+  check('after the bounce you land back on your own ring', landedBack === 0);
 }
 
 // ---- 2. coyote time: jump still works within 90ms of losing support ----
@@ -102,9 +121,10 @@ function step(shard: Shard, input: FakeInput, field: RingField, seconds: number,
 
 // ---- 3. input buffer: jump pressed shortly before landing fires on land ----
 {
-  const field = makeField(() => 1);
+  // door open on the way up, floor on the way down (as in test 1)
   const shard = new Shard();
   shard.reset();
+  const field = makeField((k) => (k >= 1 ? (shard.vel > 0 ? 0 : 1) : 1));
   const input = new FakeInput();
   input.jump = true;
   let lands = 0;
@@ -241,6 +261,41 @@ function step(shard: Shard, input: FakeInput, field: RingField, seconds: number,
   check('base hues span ≥300° of the wheel over 40 Blooms', 360 - maxGap >= 300);
   check('visual load stays under the per-tier budget (40 Blooms)', loadsOk);
   check('every 3rd Bloom is a Lull', lullsOk);
+}
+
+// ---- 11. maze generation: solid floors, and a door ALWAYS exists ----
+{
+  const field = new RealRingField(hashSeed('mazetest'));
+  field.ensureWindow(10, GEN, 1);
+  const w = GEN.wedge;
+  let solidOk = true;
+  let doorAlways = true;
+  for (const [k, ring] of field.rings) {
+    if (k === 0) continue;
+    let avgSolid = 0;
+    // check across a full pattern rotation (the fold hides frac > 0.5
+    // part-time — doors must never all vanish)
+    for (let rot = 0; rot < 8; rot++) {
+      ring.phi = (rot / 8) * 2 * w;
+      let solid = 0;
+      let open = 0;
+      for (let i = 1; i <= 360; i++) {
+        const th = (i / 360) * 2 * Math.PI;
+        if (field.sample(k, th, w) !== SAMPLE_NONE) solid++;
+        else open++;
+      }
+      avgSolid += solid / 360;
+      if (open === 0) doorAlways = false;
+    }
+    avgSolid /= 8;
+    if (avgSolid < 0.45 || avgSolid > 0.99) solidOk = false;
+  }
+  check('maze rings stay mostly solid (avg over rotations)', solidOk);
+  check('an open doorway exists at every rotation (no soft-locks)', doorAlways);
+  const spawnField = new RealRingField(hashSeed('mazetest'));
+  spawnField.ensureWindow(3, GEN, 1); // the opening window, as startRun builds
+  const spawn = spawnField.findSolid(0, w);
+  check('spawn angle stands on solid floor', spawnField.sample(0, spawn, w) === SAMPLE_PLATFORM);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);

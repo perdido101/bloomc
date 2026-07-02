@@ -123,6 +123,8 @@ export interface ShardEvents {
   onJump?: () => void;
   onDash?: () => void;
   onLand?: (ring: number) => void;
+  /** hit the solid underside of a ring while jumping inward */
+  onBounce?: (ring: number) => void;
   /** grabbed a ledge and is pulling up onto ring k */
   onGrab?: (ring: number) => void;
   /** left a ring after standing standDur seconds (skim if < window) */
@@ -274,6 +276,23 @@ export class Shard {
       this.vel -= TUNING.GRAVITY_OUT * dt;
       const prev = this.depth;
       this.depth += this.vel * dt;
+
+      if (this.vel > 0) {
+        // rising inward: solid ring undersides block — only doors let you
+        // through. This is the maze.
+        const loK = Math.ceil(prev / S + 1e-6);
+        const hiK = Math.floor(this.depth / S);
+        for (let k = Math.max(1, loK); k <= hiK; k++) {
+          if (!field.rings.has(k)) continue;
+          const sUp = field.sample(k, this.theta, wedge, twist);
+          if (sUp !== SAMPLE_NONE) {
+            this.depth = k * S - 0.05;
+            this.vel = -this.vel * TUNING.BOUNCE_RESTITUTION;
+            ev.onBounce?.(k);
+            break;
+          }
+        }
+      }
 
       if (this.vel < 0) {
         // falling outward: test each ring plane crossed this frame

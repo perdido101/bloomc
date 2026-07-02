@@ -6,6 +6,8 @@ export interface WorldGen {
   hazardDensity: number;
   tier: number;
   layoutStyle: 'even-gaps' | 'cluster' | 'staircase-drift';
+  /** current collision wedge width, radians (doors are sized in world angle) */
+  wedge: number;
 }
 
 /** FNV-1a hash of a string → uint32, for seeding runs from a seed string. */
@@ -145,77 +147,65 @@ export class RingField {
     const omega = sign * mag;
     const phi = rng.next() * Math.PI * 2;
 
-    // --- platforms: arcs filling `coverage` of the wedge ---
-    const rawCov = TUNING.PLATFORM_COVERAGE_START - TUNING.COVERAGE_DECAY_PER_DEPTH * k;
-    let coverage = Math.max(TUNING.PLATFORM_COVERAGE_MIN, rawCov);
-    coverage = Math.min(0.92, Math.max(0.3, coverage / (gen.gapScale * Math.pow(intensity, 0.35))));
-    // the starting ring is a safe haven
-    if (k === 0) coverage = 0.98;
+    // --- the maze: rings are near-solid floors with 1-2 doorways per
+    // wedge (mirrored N times). Doors are both the way inward AND holes
+    // under your feet. Solid parts block jumps from below. ---
+    const wedge = gen.wedge > 0 ? gen.wedge : Math.PI / 4;
+    let doorRad = Math.max(
+      TUNING.DOOR_WIDTH_MIN_RAD,
+      TUNING.DOOR_WIDTH_RAD - TUNING.DOOR_SHRINK_PER_DEPTH * k
+    ) / (gen.gapScale * Math.pow(intensity, 0.25));
+    if (k < 3) doorRad *= 1.35; // generous opening rings
+    // a door must always be passable (min world angle) but never eat the
+    // floor: cap it as a fraction of the wedge
+    const minPass = 0.16; // rad — comfortably wider than the player
+    const wf = Math.min(k < 3 ? 0.28 : 0.22, Math.max(minPass / wedge, doorRad / wedge));
 
-    const maxArcs = Math.min(3, 1 + Math.floor(k / 8));
-    const nArcs = k === 0 ? 1 : 1 + Math.floor(rng.next() * maxArcs);
-    const arcs: Arc[] = [];
-    // three seeded layout generators so ring RHYTHM evolves with tier
-    if (gen.layoutStyle === 'cluster' && k > 0) {
-      // arcs bunched together with slivers of gap, then one big void
-      let cursor = rng.next();
-      const sliver = 0.02 + rng.next() * 0.03;
-      const wSum = coverage - sliver * (nArcs - 1);
-      for (let i = 0; i < nArcs; i++) {
-        const w = wSum / nArcs;
-        arcs.push({ s: cursor, e: cursor + w, hazard: false });
-        cursor += w + sliver;
-      }
-    } else if (gen.layoutStyle === 'staircase-drift' && k > 0) {
-      // even arcs whose anchor drifts a fixed step per ring — a spiral stair
-      const cursor0 = (k * 0.1459) % 1;
-      const w = coverage / nArcs;
-      const gap = (1 - coverage) / nArcs;
-      for (let i = 0; i < nArcs; i++) {
-        const s0 = cursor0 + i * (w + gap);
-        arcs.push({ s: s0, e: s0 + w, hazard: false });
-      }
-    } else {
-      // even-gaps: random positive weights for pieces and gaps, alternating
-      const pw: number[] = [];
-      const gw: number[] = [];
-      for (let i = 0; i < nArcs; i++) {
-        pw.push(0.35 + rng.next());
-        gw.push(0.35 + rng.next());
-      }
-      const pSum = pw.reduce((a, b) => a + b, 0);
-      const gSum = gw.reduce((a, b) => a + b, 0);
-      let cursor = rng.next(); // random offset; fold wraps it seamlessly
-      for (let i = 0; i < nArcs; i++) {
-        const w = (pw[i] / pSum) * coverage;
-        arcs.push({ s: cursor, e: cursor + w, hazard: false });
-        cursor += w + (gw[i] / gSum) * (1 - coverage);
-      }
+    let doorCount: number;
+    if (k < 3) doorCount = 2;
+    else if (gen.layoutStyle === 'cluster' || gen.layoutStyle === 'staircase-drift') doorCount = 1;
+    else doorCount = rng.next() < 0.6 ? 2 : 1;
+    if (doorCount === 2 && wf > 0.2) doorCount = 1; // keep most of the floor
+
+    // IMPORTANT: the ring-rotation fold displays an alternating window of
+    // the authored pattern — only frac 0.5 is visible at EVERY rotation.
+    // So each ring gets a "keystone" door centered at 0.5 (an opening
+    // always exists somewhere — no soft-locks); any second door lives
+    // elsewhere and comes and goes with the rotation for variety.
+    const doors: number[] = [0.5 + (rng.next() - 0.5) * 0.05];
+    if (doorCount === 2 && gen.layoutStyle !== 'staircase-drift') {
+      doors.push(rng.next() < 0.5 ? rng.range(0.1, 0.32) : rng.range(0.68, 0.9));
     }
-    // normalize arcs into [0,1) space (they may exceed 1; split them)
+
+    // solid arcs = the complement of the doors in [0,1)
+    const cuts = doors
+      .map((d) => ({ s: d - wf / 2, e: d + wf / 2 }))
+      .flatMap((c) => {
+        if (c.s < 0) return [{ s: c.s + 1, e: 1 }, { s: 0, e: c.e }];
+        if (c.e > 1) return [{ s: c.s, e: 1 }, { s: 0, e: c.e - 1 }];
+        return [c];
+      })
+      .sort((a, b) => a.s - b.s);
     const normArcs: Arc[] = [];
-    for (const a of arcs) {
-      const base = Math.floor(a.s);
-      const s0 = a.s - base;
-      const e0 = a.e - base;
-      if (e0 <= 1) normArcs.push({ s: s0, e: e0, hazard: a.hazard });
-      else {
-        normArcs.push({ s: s0, e: 1, hazard: a.hazard });
-        normArcs.push({ s: 0, e: e0 - 1, hazard: a.hazard });
-      }
+    let cursor = 0;
+    for (const c of cuts) {
+      if (c.s > cursor + 0.01) normArcs.push({ s: cursor, e: c.s, hazard: false });
+      cursor = Math.max(cursor, c.e);
     }
+    if (cursor < 0.99) normArcs.push({ s: cursor, e: 1, hazard: false });
 
     // --- hazards: crystal spikes claim an edge slice of a platform arc ---
     const hazardChance = Math.min(
       TUNING.HAZARD_CHANCE_MAX,
       TUNING.HAZARD_CHANCE_START + TUNING.HAZARD_CHANCE_PER_DEPTH * k
     ) * gen.hazardDensity * (0.7 + 0.3 * intensity);
-    if (k >= 3 && rng.next() < hazardChance) {
+    if (k >= 4 && rng.next() < hazardChance && normArcs.length > 0) {
+      // a spike bed guarding one side of a doorway
       const idx = Math.floor(rng.next() * normArcs.length);
       const a = normArcs[idx];
       const width = a.e - a.s;
-      const hw = Math.max(0.05, width * rng.range(0.2, 0.32));
-      if (width > hw * 2.2) {
+      const hw = Math.min(width * 0.3, Math.max(0.04, wf * 0.6));
+      if (width > hw * 2.5) {
         const atStart = rng.next() < 0.5;
         if (atStart) {
           normArcs.push({ s: a.s, e: a.s + hw, hazard: true });
@@ -288,6 +278,24 @@ export class RingField {
       if (!arc.hazard && f > arc.s - h && f < arc.e + h) return SAMPLE_PLATFORM;
     }
     return SAMPLE_NONE;
+  }
+
+  /** a world angle standing on solid floor of ring k (for spawning) */
+  findSolid(k: number, wedge: number, twist = 0): number {
+    for (const margin of [0.12, 0.05, 0]) {
+      for (let i = 0; i < 128; i++) {
+        const th = (i / 128) * TWO_PI + 0.013;
+        if (
+          this.sample(k, th, wedge, twist) === SAMPLE_PLATFORM &&
+          (margin === 0 ||
+            (this.sample(k, th + margin, wedge, twist) === SAMPLE_PLATFORM &&
+              this.sample(k, th - margin, wedge, twist) === SAMPLE_PLATFORM))
+        ) {
+          return th;
+        }
+      }
+    }
+    return 0;
   }
 
   /**

@@ -297,8 +297,8 @@ function rollLayout(rng: XorShift, tier: number): PhaseDNA['layoutStyle'] {
 /** constraint solver: readability & fairness are enforced, not hoped for */
 export function sanitize(dna: PhaseDNA, tier: number, reduceFlash: boolean): void {
   // gentle opening: the first two Blooms never roll fast worlds
-  if (dna.index === 0) dna.ringSpeedMult = Math.min(dna.ringSpeedMult, 0.9);
-  else if (dna.index === 1) dna.ringSpeedMult = Math.min(dna.ringSpeedMult, 1.1);
+  if (dna.index === 0) dna.ringSpeedMult = Math.min(dna.ringSpeedMult, 1.0);
+  else if (dna.index === 1) dna.ringSpeedMult = Math.min(dna.ringSpeedMult, 1.2);
 
   // symmetry limits
   if (tier < 3) dna.mirrorN = Math.min(dna.mirrorN, 12);
@@ -450,8 +450,8 @@ export class PhaseManager {
     const g = this.intensityGame;
     const dnaMul = this.current.ringSpeedMult +
       (this.next.ringSpeedMult - this.current.ringSpeedMult) * this.mix;
-    // gentle opening: the first minute ramps from 60% to full speed
-    const warmup = Math.min(1, 0.6 + (this.runTime / 70) * 0.4);
+    // gentle opening: ramp from 78% to full speed over ~35s
+    const warmup = Math.min(1, 0.78 + (this.runTime / 35) * 0.22);
     return dnaMul * (0.85 + 0.15 * g * g) * this.transitionSpeedBoost * warmup;
   }
 

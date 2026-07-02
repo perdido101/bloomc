@@ -103,6 +103,7 @@ class Game {
   private galleryHues: number[] = [];
   private readonly worldGen: WorldGen = {
     gapScale: 1, hazardDensity: 1, tier: 0, layoutStyle: 'even-gaps',
+    wedge: Math.PI / 4,
   };
   private readonly bgParams = {
     time: 0, seed: 7.3, phaseMix: 0, noiseType: 0, noiseScale: 3,
@@ -118,7 +119,7 @@ class Game {
   private readonly climberPose = {
     x: 0, y: 0, posAngle: 0, omega: 0,
     state: 'run' as import('./render/shard').ClimberState,
-    grabT: -1, size: 0.13,
+    grabT: -1, size: 0.055,
   };
 
   // attract mode
@@ -166,6 +167,12 @@ class Game {
       audio.playSfx('mote');
       const sp = this.shardClipPos();
       this.particles.burst(sp[0], sp[1], 16, 0.5, 0.6, 0.017, 0.65, 1, 0.9);
+    },
+    onBounce: () => {
+      audio.playSfx('bounce');
+      this.shardVisual.squash = 0.8;
+      const sp = this.shardClipPos();
+      this.particles.burst(sp[0], sp[1], 8, 0.35, 0.35, 0.014, 0.7, 0.8, 1);
     },
     onGrab: () => {
       audio.playSfx('grab');
@@ -428,6 +435,16 @@ class Game {
     audio.setPhase(this.pm.current.texId);
     audio.setScene('game');
     audio.setMusicKey(this.pm.current.palette.baseHue, this.pm.tier, this.pm.current.lull);
+    // build the opening window now and spawn standing on solid floor,
+    // not over a doorway
+    const cur = this.pm.current;
+    this.worldGen.gapScale = cur.gapScale;
+    this.worldGen.hazardDensity = cur.hazardDensity;
+    this.worldGen.tier = cur.tier;
+    this.worldGen.layoutStyle = cur.layoutStyle;
+    this.worldGen.wedge = TWO_PI / cur.mirrorN;
+    this.field.ensureWindow(TUNING.RING_WINDOW, this.worldGen, this.pm.intensityGame);
+    this.shard.theta = this.field.findSolid(0, this.worldGen.wedge, cur.mirrorTwist);
     const [x, y] = this.shardClipPos();
     this.shardVisual.reset(x, y);
     this.menus.showRun();
@@ -562,6 +579,7 @@ class Game {
     this.worldGen.hazardDensity = active.hazardDensity;
     this.worldGen.tier = active.tier;
     this.worldGen.layoutStyle = active.layoutStyle;
+    this.worldGen.wedge = wedgeCol;
     this.shard.jumpBoost = pm.jumpBoost;
     this.shard.coyoteMs = pm.coyoteMs;
 

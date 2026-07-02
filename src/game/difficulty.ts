@@ -14,12 +14,14 @@ export const TUNING = {
   DASH_IMPULSE: 18,         // inward burst, refreshes on landing
   DASH_INTANGIBLE_S: 0.08,  // 80ms of intangibility on dash
   RING_SPACING: 10,         // world units between ring planes
-  BASE_RING_SPEED: 0.26,    // rad/s at depth 0 — gentle opening
+  BASE_RING_SPEED: 0.31,    // rad/s at depth 0
   RING_SPEED_PER_DEPTH: 0.012,
   RING_SPEED_CAP: 1.4,
-  PLATFORM_COVERAGE_START: 0.70, // fraction of a wedge that is platform
-  PLATFORM_COVERAGE_MIN: 0.40,
-  COVERAGE_DECAY_PER_DEPTH: 0.004,
+  // --- the maze: rings are near-solid floors with 1-2 rotating doorways ---
+  DOOR_WIDTH_RAD: 0.46,     // base door opening, radians (shrinks with depth)
+  DOOR_WIDTH_MIN_RAD: 0.22,
+  DOOR_SHRINK_PER_DEPTH: 0.004,
+  BOUNCE_RESTITUTION: 0.35, // jumping into a solid ring bounces you back
   HAZARD_CHANCE_START: 0.15,
   HAZARD_CHANCE_MAX: 0.55,
   HAZARD_CHANCE_PER_DEPTH: 0.004,
@@ -35,7 +37,7 @@ export const TUNING = {
   BLOOM_COUNTDOWN_S: 5.0,
 
   // --- movement feel (auto-run: the climber always runs, one-thumb play) ---
-  RUN_SPEED_MIN: 0.3,       // rad/s floor for the auto-run, so rings feel alive
+  RUN_SPEED_MIN: 0.34,      // rad/s floor for the auto-run, so rings feel alive
   RUN_SPEED_REL: 0.85,      // auto-run speed = max(MIN, 0.85× |ring speed|)
   MOVE_EASE_S: 0.17,        // ease when flipping run direction (smooth, not snappy)
   AIR_DRIFT: 0.35,          // rad/s of gentle drift toward run dir while airborne
@@ -53,8 +55,8 @@ export const TUNING = {
 
   // --- world window / camera ---
   RING_WINDOW: 3,           // rings kept at depth-3 .. depth+3
-  DEPTH_MAP_A: 2.15,        // screen mapping: n=(A - ringOffset)/B, sN=n^FISHEYE_EXP
-  DEPTH_MAP_B: 5.65,        //   (player ring ~55% radius; rings ~40% farther apart)
+  DEPTH_MAP_A: 2.5,         // screen mapping: n=(A - ringOffset)/B, sN=n^FISHEYE_EXP
+  DEPTH_MAP_B: 6.6,         //   (player ring ~55% radius; rings ~20% farther apart)
   CAM_OMEGA: 12,            // critically damped camera spring (~0.35s settle)
   // global view rotation is now per-Bloom DNA (rotationDrift, ±0.008–0.028)
   RING_BAND_HALF: 1.2,      // radial half-thickness of a ring band, world units
