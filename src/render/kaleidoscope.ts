@@ -180,6 +180,7 @@ uniform float uTwistOld;
 uniform float uTwistNew;
 uniform float uMirrorMix;
 uniform float uViewRot;
+uniform float uWorldAlpha; // 0 = background only (main menu), 1 = full world
 
 ${GLSL_FOLD}
 
@@ -203,6 +204,7 @@ void main() {
   if (uMirrorMix > 0.001) {
     w = mix(w, sampleWedge(rN, th, uWedgeNew, uTwistNew), uMirrorMix);
   }
+  w *= uWorldAlpha;
   vec3 bg = texture(uBgTex, vUV).rgb;
   // wedge output is premultiplied-ish: composite over the background
   finalColor = vec4(bg * (1.0 - min(w.a, 1.0)) + w.rgb, 1.0);
@@ -360,6 +362,7 @@ export class MirrorPass {
           uTwistNew: { value: 0, type: 'f32' },
           uMirrorMix: { value: 0, type: 'f32' },
           uViewRot: { value: 0, type: 'f32' },
+          uWorldAlpha: { value: 1, type: 'f32' },
         },
         uWedgeTex: wedgeTex.source,
         uBgTex: bgTex.source,
@@ -381,7 +384,8 @@ export class MirrorPass {
     twistOld: number,
     twistNew: number,
     mirrorMix: number,
-    viewRot: number
+    viewRot: number,
+    worldAlpha = 1
   ): void {
     const u = this.mesh.shader!.resources.mirrorUniforms.uniforms;
     u.uWedgeOld = wedgeOld;
@@ -390,6 +394,7 @@ export class MirrorPass {
     u.uTwistNew = twistNew;
     u.uMirrorMix = mirrorMix;
     u.uViewRot = viewRot;
+    u.uWorldAlpha = worldAlpha;
     renderer.render({ container: this.mesh, target, clear: true });
   }
 }

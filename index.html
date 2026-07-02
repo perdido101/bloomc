@@ -68,11 +68,21 @@
       50% { letter-spacing: 0.72em; opacity: 1; }
     }
     #wordmark {
+      /* static menu wordmark — the unfurl effect lives on the splash */
+      font-size: min(9vw, 60px); font-weight: 300; color: #eaffff;
+      letter-spacing: 0.55em; text-indent: 0.55em;
+      text-shadow: 0 0 22px currentColor, 0 0 70px rgba(159,220,255,0.5);
+      animation: breathe 7s ease-in-out infinite;
+    }
+    #splash { background: none; }
+    #splashWordmark {
       /* invisible placeholder: the kaleidoscope-unfurl shader draws the
          wordmark in-canvas at this element's position */
-      font-size: min(9.5vw, 72px); font-weight: 300; color: transparent;
+      font-size: min(13vw, 96px); font-weight: 300; color: transparent;
       letter-spacing: 0.55em; text-indent: 0.55em; text-shadow: none;
     }
+    @keyframes hintIn { from { opacity: 0; } to { opacity: 0.75; } }
+    #splashHint { opacity: 0; animation: hintIn 1.2s ease-in 2.6s forwards; }
     .hint { font-size: min(4vw, 18px); opacity: 0.75; letter-spacing: 0.3em;
             animation: breathe 3s ease-in-out infinite; }
     .strip { font-size: min(3.2vw, 14px); opacity: 0.6; letter-spacing: 0.12em; line-height: 1.9; }
@@ -132,6 +142,11 @@
   <div id="app"></div>
   <div id="ui">
     <div id="bootMsg">B L O O M</div>
+
+    <div id="splash" class="panel">
+      <div id="splashWordmark">BLOOM</div>
+      <div class="hint" id="splashHint">TAP TO ENTER</div>
+    </div>
 
     <div id="title" class="panel">
       <div id="wordmark">BLOOM</div>

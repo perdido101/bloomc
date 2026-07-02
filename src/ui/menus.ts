@@ -43,6 +43,7 @@ export class Menus {
   /** any button press (unlocks WebAudio) */
   onUiTap: (() => void) | null = null;
 
+  private splash = el<HTMLDivElement>('splash');
   private title = el<HTMLDivElement>('title');
   private howto = el<HTMLDivElement>('howto');
   private board = el<HTMLDivElement>('board');
@@ -61,6 +62,10 @@ export class Menus {
         fn();
       });
     };
+    this.splash.addEventListener('pointerup', () => {
+      this.onUiTap?.();
+      this.showTitle();
+    });
     tap('btnPlay', () => this.onStart?.());
     tap('btnHow', () => this.showPanel(this.howto));
     tap('btnBoard', () => this.showBoard());
@@ -136,6 +141,14 @@ export class Menus {
   private showPanel(panel: HTMLDivElement): void {
     this.hideAll();
     panel.classList.add('show');
+  }
+
+  showSplash(): void {
+    this.showPanel(this.splash);
+  }
+
+  get isSplashShown(): boolean {
+    return this.splash.classList.contains('show');
   }
 
   showTitle(): void {
@@ -218,7 +231,7 @@ export class Menus {
   }
 
   hideAll(): void {
-    for (const p of [this.title, this.howto, this.board, this.settingsPanel, this.gameover, this.pauseVeil]) {
+    for (const p of [this.splash, this.title, this.howto, this.board, this.settingsPanel, this.gameover, this.pauseVeil]) {
       p.classList.remove('show');
     }
     this.pauseBtn.classList.remove('show');

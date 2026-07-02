@@ -8,9 +8,12 @@ const browser = await chromium.launch({
 const page = await browser.newPage({ viewport: { width: 420, height: 780 } });
 page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 300)));
 await page.goto(url);
-await page.waitForTimeout(2600); // boot + early unfurl
+await page.waitForTimeout(2600); // boot + early unfurl on the splash
 await page.screenshot({ path: shots + '/m1-unfurl.png' });
-await page.waitForTimeout(9000); // formed + breathing
+await page.waitForTimeout(8000); // formed + tap-to-enter hint
+await page.screenshot({ path: shots + '/m1b-splash.png' });
+await page.click('#splash');
+await page.waitForTimeout(2500); // world fades out behind the menu
 await page.screenshot({ path: shots + '/m2-menu.png' });
 await page.click('#btnHow');
 await page.waitForTimeout(400);

@@ -87,6 +87,11 @@ class Game {
   private hudColorRev = -1;
   private wmTintRev = -1;
   private dashVisT = 0;
+  /** rings fade out behind the main menu (subtle background only) */
+  private worldAlpha = 1;
+  /** render-only smoothed radial position (softens landing snaps) */
+  private visDepth = 0;
+  private visDepthVel = 0;
   // escalation / DNA state
   private hueShift = 0;
   private fisheyeExp: number = TUNING.FISHEYE_EXP;
@@ -113,7 +118,7 @@ class Game {
   private readonly climberPose = {
     x: 0, y: 0, posAngle: 0, omega: 0,
     state: 'run' as import('./render/shard').ClimberState,
-    grabT: -1, size: 0.115,
+    grabT: -1, size: 0.13,
   };
 
   // attract mode
@@ -147,6 +152,7 @@ class Game {
       const sp = this.shardClipPos();
       this.particles.burst(sp[0], sp[1], gained > 0 ? 14 : 8, 0.4, 0.45, 0.016, 0.85, 0.95, 1);
       this.shardVisual.flash = 0.7;
+      this.shardVisual.squash = 1;
     },
     onLeave: (dur) => {
       if (this.scoring.onLeave(dur)) {
@@ -232,7 +238,7 @@ class Game {
     this.computeLayout();
     this.buildPipeline();
     this.wordmark = new WordmarkFX('BLOOM');
-    this.wordmarkEl = document.getElementById('wordmark');
+    this.wordmarkEl = document.getElementById('splashWordmark');
 
     this.input = new Input(host);
     this.input.onPause = () => this.togglePause();
@@ -296,7 +302,7 @@ class Game {
     this.pm.reset(hashSeed('attract'));
     this.menus.hideBoot();
     if (this.galleryEvery > 0) this.menus.galleryMode();
-    else this.menus.showTitle();
+    else this.menus.showSplash();
     this.fsm.set(GameState.MENU);
 
     this.lastNow = performance.now();
@@ -408,6 +414,8 @@ class Game {
     this.particles.clear();
     this.camDepth = 0;
     this.camVel = 0;
+    this.visDepth = 0;
+    this.visDepthVel = 0;
     this.zoom = 0;
     this.ripple = 0;
     this.newBestPending = false;
@@ -475,13 +483,30 @@ class Game {
 
   private readonly shardPos = new Float32Array(2);
 
-  /** shard position in square clip space (reuses a scratch array) */
+  /** shard position in square clip space (reuses a scratch array).
+   *  Uses the render-smoothed depth so landings settle instead of snapping. */
   private shardClipPos(): Float32Array {
-    const sN = this.mapDepth(this.shard.depth);
+    const sN = this.mapDepth(this.visDepth);
     const a = this.shard.theta + this.viewRot;
     this.shardPos[0] = sN * Math.cos(a);
     this.shardPos[1] = sN * Math.sin(a);
     return this.shardPos;
+  }
+
+  private updateVisDepth(dt: number): void {
+    const diff = this.shard.depth - this.visDepth;
+    if (Math.abs(diff) > 4 || dt <= 0) {
+      // teleports (reset) snap instantly
+      this.visDepth = this.shard.depth;
+      this.visDepthVel = 0;
+      return;
+    }
+    // stiff critically-damped spring: ~70ms settle, invisible in the air,
+    // takes the harsh edge off landings and grab pull-ups
+    const W = 30;
+    const acc = W * W * diff - 2 * W * this.visDepthVel;
+    this.visDepthVel += acc * dt;
+    this.visDepth += this.visDepthVel * dt;
   }
 
   private readonly tick = (now: number): void => {
@@ -540,6 +565,15 @@ class Game {
     this.shard.jumpBoost = pm.jumpBoost;
     this.shard.coyoteMs = pm.coyoteMs;
 
+    // rings fade away behind the main menu (splash & gameplay show them)
+    const wantWorld =
+      this.galleryEvery > 0 ||
+      !this.fsm.is(GameState.MENU) ||
+      this.menus.isSplashShown
+        ? 1
+        : 0.06;
+    this.worldAlpha += (wantWorld - this.worldAlpha) * Math.min(1, dtRaw * 3);
+
     if (this.fsm.is(GameState.MENU, GameState.GAMEOVER)) {
       // attract mode: endless gentle descent (gallery rolls DNA here too)
       if (this.galleryEvery > 0) this.galleryTick(dtRaw);
@@ -586,6 +620,7 @@ class Game {
       this.ripple = 1; // full-screen symmetric shockwave
     }
 
+    this.updateVisDepth(dt);
     this.render(dtRaw, dt, wedgeCol, mix, cur, nxt);
     this.updateDebug();
   };
@@ -677,7 +712,8 @@ class Game {
       cur.mirrorTwist,
       nxt.mirrorTwist,
       mirrorMix,
-      this.viewRot
+      this.viewRot,
+      this.worldAlpha
     );
 
     // player pass: climber + trail + particles, unmirrored, on top
@@ -720,11 +756,11 @@ class Game {
       caScale: pm.tier >= 3 ? 1.6 : 1,
     });
 
-    // animated wordmark over the title menu (kaleidoscope unfurl)
+    // animated wordmark over the splash (kaleidoscope unfurl)
     if (
       this.fsm.is(GameState.MENU) &&
       this.galleryEvery === 0 &&
-      this.menus.isTitleShown &&
+      this.menus.isSplashShown &&
       this.wordmarkEl
     ) {
       if (this.lut.revision !== this.wmTintRev) {

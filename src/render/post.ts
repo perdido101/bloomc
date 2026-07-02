@@ -52,16 +52,9 @@ uniform vec2 uZoomCenter;  // square-uv focus of the death zoom
 uniform vec3 uVigColor;
 uniform vec4 uParams;      // barrel, bloomGain, caBase, caRadial
 
-float mirr(float x) {
-  x = abs(x);
-  return x > 1.0 ? 2.0 - x : x;
-}
-
 void main() {
   vec2 px = vUV * uScreen;
   vec2 suv = (px - uLayout.xy) / uLayout.z;
-  vec2 m = abs(suv - 0.5);
-  float inside = 1.0 - smoothstep(0.495, 0.505, max(m.x, m.y));
 
   vec2 c = suv * 2.0 - 1.0;
   // death slow-mo zoom toward the shard
@@ -69,7 +62,11 @@ void main() {
   c /= 1.0 + uFx.z * 0.9;
   float r2 = dot(c, c);
   c *= 1.0 + uParams.x * r2; // subtle barrel for extra fisheye
-  float r = sqrt(dot(c, c));
+  // the world is radial: pixels beyond the square (portrait/landscape
+  // margins) sample the rim along their own direction — the vortex simply
+  // continues outward, no mirrored copies
+  float r = length(c);
+  if (r > 0.985) c *= 0.985 / r;
   vec2 zuv = c * 0.5 + 0.5;
 
   float ca = (uParams.z + uParams.w * r) * (1.0 + uFx.x * 3.0);
@@ -88,14 +85,12 @@ void main() {
     col += (uVigColor + 0.6) * exp(-d * d * 320.0) * uFx.y * 0.9;
   }
 
-  // breathing vignette, palette-dark
-  float vig = smoothstep(0.55, 1.3, r) * (0.5 + 0.03 * uFx.w);
-  col = mix(col, uVigColor * 0.35, vig);
+  // breathing vignette, palette-dark — keeps darkening past the square
+  // edge so the extended rim fades out naturally
+  float vig = smoothstep(0.55, 1.45, r) * (0.55 + 0.03 * uFx.w);
+  col = mix(col, uVigColor * 0.28, vig);
 
-  // margins outside the square: darkened blurred copy of the scene
-  vec2 ms = vec2(mirr(suv.x), mirr(suv.y));
-  vec3 margin = texture(uB2, ms).rgb * 0.7 + texture(uScene, ms).rgb * 0.18;
-  finalColor = vec4(mix(margin * 0.45, col, inside), 1.0);
+  finalColor = vec4(col, 1.0);
 }
 `;
 

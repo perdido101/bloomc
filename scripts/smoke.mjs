@@ -20,6 +20,8 @@ await page.waitForTimeout(3500);
 await page.screenshot({ path: shots + '/1-title.png' });
 
 // start a run (tap center of title panel)
+await page.click('#splash');
+await page.waitForTimeout(300);
 await page.click('#btnPlay');
 await page.waitForTimeout(1200);
 await page.screenshot({ path: shots + '/2-run.png' });

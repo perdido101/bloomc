@@ -125,6 +125,8 @@ export class ShardVisual {
   /** palette glow color, set from the LUT each phase change */
   readonly glowColor = new Float32Array([0.4, 0.8, 1.0]);
   flash = 0;
+  /** landing squash impulse (set to 1 on land, decays) */
+  squash = 0;
 
   private body: Mesh<Geometry, Shader>;
   private trail: Mesh<Geometry, Shader>;
@@ -254,8 +256,8 @@ export class ShardVisual {
   }
 
   private poseFall(t: number): void {
-    // flail: limbs wide, waving
-    const w = Math.sin(t * 9) * 0.05;
+    // flail: limbs wide, waving (gently — it read as scribble when fast)
+    const w = Math.sin(t * 6) * 0.03;
     this.setJ(J.pelvis, 0, 0.36);
     this.setJ(J.chest, 0, 0.64);
     this.setJ(J.head, 0, 0.80);
@@ -305,6 +307,7 @@ export class ShardVisual {
     this.root.visible = visible;
     if (!visible) return;
     this.flash = Math.max(0, this.flash - dt * 4);
+    this.squash = Math.max(0, this.squash - dt * 5);
     this.hueBase = (this.hueBase + dt * 0.35) % 1;
 
     // --- pick pose in local space ---
@@ -320,7 +323,7 @@ export class ShardVisual {
       case 'dash': this.poseDash(); break;
     }
     // smooth toward target pose
-    const k = 1 - Math.exp(-dt * 22);
+    const k = 1 - Math.exp(-dt * 15);
     for (let i = 0; i < N_JOINTS * 2; i++) {
       this.joints[i] += (this.target[i] - this.joints[i]) * k;
     }
@@ -333,20 +336,22 @@ export class ShardVisual {
     const tx = -Math.sin(pose.posAngle) * facing;
     const ty = Math.cos(pose.posAngle) * facing;
     const s = pose.size;
-    const wx = (lx: number, ly: number) => pose.x + (tx * lx + ux * ly) * s;
-    const wy = (lx: number, ly: number) => pose.y + (ty * lx + uy * ly) * s;
+    const sqX = 1 + 0.18 * this.squash;
+    const sqY = 1 - 0.24 * this.squash;
+    const wx = (lx: number, ly: number) => pose.x + (tx * lx * sqX + ux * ly * sqY) * s;
+    const wy = (lx: number, ly: number) => pose.y + (ty * lx * sqX + uy * ly * sqY) * s;
 
     // --- write quads: glow pass under core pass per bone ---
-    const coreW = s * 0.045;
+    const coreW = s * 0.055;
     const g = this.glowColor;
     const bright = Math.min(1.6, 1 + this.flash);
     // layer params: dark silhouette → palette accent → white-hot core
-    const widths = [coreW * 3.0, coreW * 1.8, coreW];
+    const widths = [coreW * 2.6, coreW * 1.7, coreW];
     const colR = [0.008, g[0], 0.97 * bright];
     const colG = [0.014, g[1], 0.99 * bright];
     const colB = [0.045, g[2], 1.0 * bright];
-    const colA = [0.88, 0.95, 1.0];
-    const headR = [s * 0.155, s * 0.125, s * 0.095];
+    const colA = [0.92, 0.95, 1.0];
+    const headR = [s * 0.165, s * 0.14, s * 0.11];
     let q = 0;
     for (let pass = 0; pass < N_LAYERS; pass++) {
       const w = widths[pass];
@@ -381,7 +386,7 @@ export class ShardVisual {
       this.hist[1] = py;
     }
     const clipSpeed = Math.hypot(px - prevX, py - prevY) / Math.max(dt, 1e-4);
-    const w0 = 0.004 + Math.min(0.02, clipSpeed * 0.012);
+    const w0 = 0.003 + Math.min(0.015, clipSpeed * 0.009);
     const pts = Math.max(2, this.histLen);
     for (let i = 0; i <= SEGS; i++) {
       const pi = Math.min(i, pts - 1);
