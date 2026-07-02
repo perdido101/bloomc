@@ -1,4 +1,4 @@
-name: Deploy VORTIKA to GitHub Pages
+name: Deploy Bloom to GitHub Pages
 
 on:
   push:
@@ -25,9 +25,23 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # Pages must be in "workflow" build mode — if it was ever enabled in
+      # legacy branch mode, GitHub's Jekyll build would deploy the raw repo
+      # source over our artifact (symptom: the site serves /src/main.ts and
+      # hangs on the boot screen). Create or flip the config explicitly.
+      - name: Force Pages build_type to workflow
+        run: |
+          curl -sS -o /dev/null -w "create: %{http_code}\n" -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pages \
+            -d '{"build_type":"workflow"}' || true
+          curl -sS -o /dev/null -w "update: %{http_code}\n" -X PUT \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/pages \
+            -d '{"build_type":"workflow"}' || true
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

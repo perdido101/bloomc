@@ -1,4 +1,4 @@
-# VORTIKA
+# BLOOM
 
 A high-score endless platformer played inside a living kaleidoscope. You are
 a glowing prism shard descending toward the eye of an ever-blooming mandala
