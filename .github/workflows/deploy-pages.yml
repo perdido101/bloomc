@@ -25,22 +25,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      # Pages must be in "workflow" build mode — if it was ever enabled in
-      # legacy branch mode, GitHub's Jekyll build would deploy the raw repo
-      # source over our artifact (symptom: the site serves /src/main.ts and
-      # hangs on the boot screen). Create or flip the config explicitly.
-      - name: Force Pages build_type to workflow
-        run: |
-          curl -sS -o /dev/null -w "create: %{http_code}\n" -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/pages \
-            -d '{"build_type":"workflow"}' || true
-          curl -sS -o /dev/null -w "update: %{http_code}\n" -X PUT \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/repos/${{ github.repository }}/pages \
-            -d '{"build_type":"workflow"}' || true
+      # Pages source must stay set to "GitHub Actions" in the repo settings —
+      # in legacy branch mode, GitHub's own Jekyll build would publish the raw
+      # repo source over this artifact (symptom: the site serves /src/main.ts
+      # and hangs on the boot screen).
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -53,14 +41,5 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      # The repo's Pages config is stuck in legacy "deploy from branch" mode
-      # (flipping it needs repo-admin rights the workflow token lacks — the
-      # API calls above return 403). The legacy Jekyll build publishes the
-      # raw source a few seconds after every push, clobbering our artifact.
-      # Waiting here guarantees our built site deploys LAST and wins.
-      # Permanent fix: repo Settings → Pages → Source: "GitHub Actions",
-      # then this delay can be removed.
-      - name: Outwait the legacy branch-mode Pages build
-        run: sleep 150
       - id: deployment
         uses: actions/deploy-pages@v4
