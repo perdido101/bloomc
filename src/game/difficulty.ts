@@ -34,11 +34,22 @@ export const TUNING = {
   BLOOM_COUNTDOWN_S: 5.0,
   CYCLE_INTENSITY_GAIN: 1.08, // global intensity multiplier per full 4-phase cycle
 
-  // --- movement feel ---
-  MOVE_MAX_REL: 1.6,        // max tangential speed = 1.6× |ring speed|
-  MOVE_EASE_S: 0.12,        // acceleration ease to full speed
-  AIR_STEER: 0.9,           // rad/s of steering authority while airborne
+  // --- movement feel (auto-run: the climber always runs, one-thumb play) ---
+  RUN_SPEED_MIN: 0.34,      // rad/s floor for the auto-run, so rings feel alive
+  RUN_SPEED_REL: 0.85,      // auto-run speed = max(MIN, 0.85× |ring speed|)
+  MOVE_EASE_S: 0.12,        // ease when flipping run direction
+  AIR_DRIFT: 0.35,          // rad/s of gentle drift toward run dir while airborne
   PLAYER_HALF_ANG: 0.045,   // player angular half-width (rad) for collisions
+
+  // --- ledge grab (climber forgiveness) ---
+  GRAB_RANGE_ANG: 0.11,     // rad: how far past a platform edge a grab still catches
+  GRAB_PULL_S: 0.22,        // pull-up animation duration
+  GRAB_INSET_FRAC: 0.015,   // how far inside the arc the pull-up lands (frac units)
+
+  // --- touch gestures ---
+  TAP_SLOP_PX: 26,          // max movement for a touch to count as a tap (jump)
+  TAP_MAX_MS: 350,
+  SWIPE_MIN_PX: 34,         // min movement to count as a swipe (turn / dash)
 
   // --- world window / camera ---
   RING_WINDOW: 3,           // rings kept at depth-3 .. depth+3

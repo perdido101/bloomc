@@ -8,7 +8,6 @@ import { bestScore, loadHighScores, type RunRecord } from '../game/scoring';
 export interface Settings {
   reduceFlash: boolean;
   sound: boolean;
-  leftHanded: boolean;
 }
 
 const SETTINGS_KEY = 'vortika_settings_v1';
@@ -16,9 +15,9 @@ const SETTINGS_KEY = 'vortika_settings_v1';
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return { reduceFlash: false, sound: true, leftHanded: false, ...JSON.parse(raw) };
+    if (raw) return { reduceFlash: false, sound: true, ...JSON.parse(raw) };
   } catch { /* defaults */ }
-  return { reduceFlash: false, sound: true, leftHanded: false };
+  return { reduceFlash: false, sound: true };
 }
 
 function saveSettings(s: Settings): void {
@@ -67,7 +66,6 @@ export class Menus {
     // keep the two settings rows in sync
     this.bindToggle('optFlash', 'optFlash2', 'reduceFlash');
     this.bindToggle('optSound', 'optSound2', 'sound');
-    this.bindToggle('optLeft', 'optLeft2', 'leftHanded');
     this.syncToggles();
   }
 
@@ -87,8 +85,6 @@ export class Menus {
     el<HTMLInputElement>('optFlash2').checked = this.settings.reduceFlash;
     el<HTMLInputElement>('optSound').checked = this.settings.sound;
     el<HTMLInputElement>('optSound2').checked = this.settings.sound;
-    el<HTMLInputElement>('optLeft').checked = this.settings.leftHanded;
-    el<HTMLInputElement>('optLeft2').checked = this.settings.leftHanded;
   }
 
   hideBoot(): void {

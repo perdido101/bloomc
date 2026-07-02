@@ -6,7 +6,11 @@
  */
 import { TUNING } from '../src/game/difficulty';
 import { Shard, type Input } from '../src/game/player';
-import { foldAngle, fracDist, type RingField } from '../src/game/rings';
+import {
+  foldAngle, fracDist, hashSeed, RingField as RealRingField,
+  SAMPLE_NONE, SAMPLE_PLATFORM, type RingField,
+} from '../src/game/rings';
+import { PHASES } from '../src/game/phases';
 import { Scoring } from '../src/game/scoring';
 
 let failures = 0;
@@ -17,10 +21,9 @@ function check(name: string, cond: boolean): void {
 
 /** scripted input double */
 class FakeInput {
-  axis = 0;
+  runDir = 1;
   jump = false;
   dash = false;
-  leftHanded = false;
   jumpBuffered(): boolean { return this.jump; }
   consumeJump(): void { this.jump = false; }
   dashQueued(): boolean { return this.dash; }
@@ -29,12 +32,16 @@ class FakeInput {
 }
 
 /** field double: scripted support sampling */
-function makeField(sampleFn: (k: number, theta: number) => number): RingField {
+function makeField(
+  sampleFn: (k: number, theta: number) => number,
+  grabFn: (k: number, theta: number) => number | null = () => null
+): RingField {
   return {
     rings: new Map([[0, { omega: 0.3 }], [1, { omega: -0.3 }], [2, { omega: 0.3 }]]),
     dirFlip: 1,
     minDepth: -3,
     sample: (k: number, theta: number) => sampleFn(k, theta),
+    grabEdge: (k: number, theta: number) => grabFn(k, theta),
     collectMotes: () => 0,
   } as unknown as RingField;
 }
@@ -148,6 +155,48 @@ function step(shard: Shard, input: FakeInput, field: RingField, seconds: number,
   let died: string | null = null;
   step(shard, input, field, 4, { onDie: (c) => (died = c) });
   check('falling past the outermost ring is death', died === 'fall');
+}
+
+// ---- 7. ledge grab: a just-missed landing catches and pulls up ----
+{
+  // ring 1 has no platform under the climber, but a ledge within reach
+  const field = makeField(
+    (k) => (k === 0 ? SAMPLE_PLATFORM : SAMPLE_NONE),
+    (k) => (k === 1 ? 0.06 : null)
+  );
+  const shard = new Shard();
+  shard.reset();
+  const input = new FakeInput();
+  input.jump = true;
+  let grabbed = -1;
+  let landed = -1;
+  step(shard, input, field, 2.5, {
+    onGrab: (k) => (grabbed = k),
+    onLand: (k) => (landed = k),
+  });
+  check('missed landing within grab range triggers a grab', grabbed === 1);
+  check('grab pull-up completes into a landing on that ring', landed === 1);
+}
+
+// ---- 8. real RingField.grabEdge is self-consistent with sample() ----
+{
+  const field = new RealRingField(hashSeed('grabtest'));
+  field.ensureWindow(3, PHASES[0], 1);
+  const w = (2 * Math.PI) / PHASES[0].mirrorN;
+  let found = 0;
+  let consistent = true;
+  for (let i = 0; i < 4000; i++) {
+    const th = (i / 4000) * Math.PI * 2;
+    for (let k = 1; k <= 5; k++) {
+      if (field.sample(k, th, w) !== SAMPLE_NONE) continue;
+      const d = field.grabEdge(k, th, w);
+      if (d === null) continue;
+      found++;
+      if (field.sample(k, th + d, w) !== SAMPLE_PLATFORM) consistent = false;
+      if (Math.abs(d) > TUNING.GRAB_RANGE_ANG * 2.5 + 1e-9) consistent = false;
+    }
+  }
+  check(`grabEdge targets are always standable (${found} grabs probed)`, found > 20 && consistent);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`);

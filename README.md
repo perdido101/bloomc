@@ -13,17 +13,21 @@ npm run build     # production build → dist/
 npm test          # deterministic physics/scoring tests
 ```
 
-### Controls
+### Controls — one thumb, no zones
 
-| Action | Desktop | Touch |
+You are a neon stickman climber who **runs along the rings by himself**.
+
+| Action | Touch | Desktop |
 | --- | --- | --- |
-| Jump (inward) | Space / W / ↑ | tap the center 40% of the screen |
-| Move | A/D or ←/→ | hold left / right side |
-| Flash-dash | Shift, or double-tap jump | double-tap the center |
-| Pause | Esc | ◈ glyph, top right |
+| Jump (inward) | tap anywhere | Space / W / ↑ |
+| Flip run direction | swipe left / right | A/D or ←/→ |
+| Flash-dash | swipe up | Shift |
+| Pause | ◈ glyph, top right | Esc |
 
 Gravity pulls **outward**. Jump inward, ring to ring. Land on the arcs;
 gaps drop you toward the rim; falling off the outermost ring ends the run.
+If a jump barely misses a platform, the climber **grabs the ledge** and
+pulls himself up — edges are your friends.
 Skim a ring (land and leave within 0.5 s) to build your combo (up to ×8).
 Every ~40 s the world **Blooms** — palette, mirror count and rotation all
 shift while you play. Surviving one is worth +500 × blooms survived.
@@ -48,6 +52,9 @@ Runs are seeded and replayable: the game-over screen shows the seed, and
   shockwaves, and letterbox margins filled with a darkened blurred copy of
   the scene (never black bars).
 - Every gameplay constant lives in `src/game/difficulty.ts`.
+- The climber is a procedurally animated stick figure (run cycle, tuck,
+  flail, hang-and-pull-up, dash stretch) drawn as layered capsules — dark
+  silhouette under a white-hot core so he reads over every palette.
 
 ## Textures (placeholder system)
 
@@ -67,6 +74,5 @@ sine/triangle placeholder blips; everything music-reactive reads from
 
 ## Settings
 
-Reduce-flash (caps bloom, disables chromatic spikes), sound on/off, and
-left-handed mode (swaps the touch move zones) — persisted, available on the
-title screen and the pause veil.
+Reduce-flash (caps bloom, disables chromatic spikes) and sound on/off —
+persisted, available on the title screen and the pause veil.

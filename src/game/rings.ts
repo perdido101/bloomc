@@ -245,6 +245,47 @@ export class RingField {
   }
 
   /**
+   * Ledge grab (climber forgiveness): when a fall just misses a platform,
+   * find the nearest non-hazard arc edge within GRAB_RANGE_ANG and return
+   * the world-angle delta that pulls the climber onto it. Uses the same
+   * double-fold as sample(); the fold slope is probed numerically so the
+   * correction is applied in the right world direction.
+   */
+  grabEdge(k: number, worldTheta: number, wedge: number): number | null {
+    const ring = this.rings.get(k);
+    if (!ring) return null;
+    const fOf = (th: number) => foldAngle(foldAngle(th, wedge) - ring.phi, wedge) / wedge;
+    const f = fOf(worldTheta);
+    const range = TUNING.GRAB_RANGE_ANG / wedge;
+    const inset = TUNING.GRAB_INSET_FRAC + TUNING.PLAYER_HALF_ANG / wedge;
+
+    let bestDist = Infinity;
+    let bestTarget = 0;
+    for (const arc of ring.arcs) {
+      if (arc.hazard) continue;
+      if (arc.e - arc.s < inset * 2.5) continue; // too small to pull onto
+      if (f < arc.s && arc.s - f <= range && arc.s - f < bestDist) {
+        bestDist = arc.s - f;
+        bestTarget = arc.s + inset;
+      } else if (f > arc.e && f - arc.e <= range && f - arc.e < bestDist) {
+        bestDist = f - arc.e;
+        bestTarget = arc.e - inset;
+      }
+    }
+    if (!isFinite(bestDist)) return null;
+
+    // probe the fold slope: df/dθ is ±1/wedge piecewise
+    const h = 1e-3;
+    const slope = (fOf(worldTheta + h) - f) / h;
+    if (Math.abs(slope) < 1e-6) return null; // sitting on a fold crease
+    const dTheta = (bestTarget - f) / slope;
+    if (Math.abs(dTheta) > TUNING.GRAB_RANGE_ANG * 2.5) return null;
+    // verify the destination really is standable (fold may kink in between)
+    if (this.sample(k, worldTheta + dTheta, wedge) !== SAMPLE_PLATFORM) return null;
+    return dTheta;
+  }
+
+  /**
    * Collect motes near the player. Motes float half a spacing above
    * (inward of) their ring plane. Returns number collected.
    */

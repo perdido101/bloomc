@@ -83,6 +83,12 @@ class Game {
   private vigStops: string[] | null = null;
   private readonly vigColor = new Float32Array(3);
   private hudColorRev = -1;
+  private dashVisT = 0;
+  private readonly climberPose = {
+    x: 0, y: 0, posAngle: 0, omega: 0,
+    state: 'run' as import('./render/shard').ClimberState,
+    grabT: -1, size: 0.115,
+  };
 
   // attract mode
   private attractDepth = 30;
@@ -91,8 +97,6 @@ class Game {
   private lastNow = 0;
   private rafId = 0;
   private paused = false;
-  private prevShardX = 0;
-  private prevShardY = 0;
   private resizeTimer = 0;
 
   private readonly mapDepth = (d: number): number => {
@@ -105,6 +109,7 @@ class Game {
     onJump: () => audio.playSfx('jump'),
     onDash: () => {
       audio.playSfx('dash');
+      this.dashVisT = 0.25;
       this.caSpike = 1;
       this.ripple = Math.max(this.ripple, 0.55);
       const sp = this.shardClipPos();
@@ -129,6 +134,12 @@ class Game {
       audio.playSfx('mote');
       const sp = this.shardClipPos();
       this.particles.burst(sp[0], sp[1], 16, 0.5, 0.6, 0.017, 0.65, 1, 0.9);
+    },
+    onGrab: () => {
+      audio.playSfx('grab');
+      const sp = this.shardClipPos();
+      this.particles.burst(sp[0], sp[1], 10, 0.3, 0.4, 0.014, 0.9, 0.95, 1);
+      this.shardVisual.flash = 0.5;
     },
     onDie: (cause) => this.beginDeath(cause),
   };
@@ -193,10 +204,8 @@ class Game {
     this.menus.onResume = () => this.togglePause();
     this.menus.onSettingsChange = (s) => {
       audio.enabled = s.sound;
-      this.input.leftHanded = s.leftHanded;
     };
     audio.enabled = this.menus.settings.sound;
-    this.input.leftHanded = this.menus.settings.leftHanded;
 
     audio.onBeat(() => {
       this.beatPulse = 1;
@@ -257,6 +266,11 @@ class Game {
     d.blooms = this.pm.bloomsDone;
     d.seed = this.seedStr;
     d.runTime = this.pm.runTime;
+    d.grabbing = this.shard.grabbing;
+    // climber position in CSS px (for the test harness)
+    d.px = (this.ox + (this.climberPose.x * 0.5 + 0.5) * this.square) / this.dpr;
+    d.py = (this.oy + (-this.climberPose.y * 0.5 + 0.5) * this.square) / this.dpr;
+    d.poseState = this.climberPose.state;
   }
 
   private computeLayout(): void {
@@ -280,7 +294,7 @@ class Game {
     const wedge = new WedgePass(S, glacia.sourceA, this.lut.texture);
     const mirror = new MirrorPass(wedge.rt, bg.rt);
     const post = new PostChain(sceneRT, S);
-    this.shardVisual = new ShardVisual(this.lut.texture);
+    this.shardVisual = new ShardVisual();
     this.particles = new Particles();
     const playerLayer = new Container();
     playerLayer.addChild(this.particles.mesh, this.shardVisual.root);
@@ -409,6 +423,7 @@ class Game {
     this.beatPulse *= Math.exp(-dt * 5);
     this.caSpike = Math.max(0, this.caSpike - dtRaw * (1000 / TUNING.CA_SPIKE_MS) * 0.001 * 5);
     this.ripple = Math.max(0, this.ripple - dtRaw * 1.6);
+    this.dashVisT = Math.max(0, this.dashVisT - dt);
 
     const phase = this.pm.current;
     const nextPhase = this.pm.next;
@@ -507,19 +522,25 @@ class Game {
       this.viewRot
     );
 
-    // player pass: shard + trail + particles, unmirrored, on top
+    // player pass: climber + trail + particles, unmirrored, on top
     const showShard = (this.fsm.playing && this.shard.alive) && !this.paused;
     const sp = this.shardClipPos();
-    const sx = sp[0];
-    const sy = sp[1];
-    const ddx = sx - this.prevShardX;
-    const ddy = sy - this.prevShardY;
-    const speed = Math.hypot(ddx, ddy) / Math.max(dtRaw, 1e-4);
-    const angle = speed > 0.02 ? Math.atan2(ddy, ddx) : this.shard.theta + this.viewRot + Math.PI / 2;
-    this.prevShardX = sx;
-    this.prevShardY = sy;
-    this.shardVisual.update(dtRaw, sx, sy, angle, speed, this.time, this.fsm.playing || this.fsm.is(GameState.DEATH) ? showShard || false : false);
-    this.shardVisual.root.visible = showShard;
+    const pose = this.climberPose;
+    pose.x = sp[0];
+    pose.y = sp[1];
+    pose.posAngle = this.shard.theta + this.viewRot;
+    pose.grabT = this.shard.grabT;
+    if (this.shard.grabbing) {
+      pose.state = 'grab';
+      pose.omega = this.shard.tangentOmega;
+    } else if (this.shard.onRing) {
+      pose.state = 'run';
+      pose.omega = this.shard.moveVel; // run animation is relative to the ring
+    } else {
+      pose.state = this.dashVisT > 0 ? 'dash' : this.shard.vel > 3 ? 'rise' : 'fall';
+      pose.omega = this.shard.moveVel;
+    }
+    this.shardVisual.update(dtRaw, pose, this.time, showShard);
     this.particles.update(dt);
     r.render({ container: p.playerLayer, target: p.sceneRT, clear: false });
 
@@ -553,6 +574,7 @@ class Game {
       if (this.lut.revision !== this.hudColorRev) {
         this.hudColorRev = this.lut.revision;
         this.hud.setColor(this.lut.colorAt(0.78));
+        this.lut.colorFloatAt(0.8, this.shardVisual.glowColor);
       }
       this.hud.update(
         dt,

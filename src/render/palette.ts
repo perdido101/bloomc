@@ -81,6 +81,15 @@ export class PaletteLut {
     this.revision++;
   }
 
+  /** current blended color at t∈[0,1] as 0..1 floats written into out */
+  colorFloatAt(t: number, out: Float32Array): void {
+    const i = Math.min(255, Math.max(0, Math.round(t * 255))) * 4;
+    const d = this.img.data;
+    out[0] = d[i] / 255;
+    out[1] = d[i + 1] / 255;
+    out[2] = d[i + 2] / 255;
+  }
+
   /** current blended color at t∈[0,1], as CSS — for DOM/HUD tinting */
   colorAt(t: number): string {
     const i = Math.min(255, Math.max(0, Math.round(t * 255))) * 4;

@@ -7,34 +7,28 @@ import {
 } from './rings';
 
 /* ------------------------------------------------------------------ */
-/*  Input: keyboard + touch zones. One-thumb playable.                  */
-/*  Touch: center 40% = jump (double-tap = dash), sides = move.         */
+/*  Input — mobile-first, one thumb, no zones to learn:                 */
+/*    tap anywhere      = jump                                          */
+/*    swipe left/right  = flip run direction                            */
+/*    swipe up          = flash-dash                                    */
+/*  Desktop: Space/W/↑ jump · A/D or ←/→ set direction · Shift dash.    */
 /* ------------------------------------------------------------------ */
 
 export class Input {
-  /** -1..1 tangential input */
-  axis = 0;
-  leftHanded = false;
+  /** run direction in screen terms: +1 = clockwise, -1 = counter-clockwise */
+  runDir = 1;
   onPause: (() => void) | null = null;
   onAnyInput: (() => void) | null = null;
 
-  private keyLeft = false;
-  private keyRight = false;
-  private touchLeft = 0;
-  private touchRight = 0;
   private jumpPressedAt = -Infinity;
   private dashPressedAt = -Infinity;
-  private lastJumpTapAt = -Infinity;
-  private activeZones = new Map<number, string>();
-  private el: HTMLElement;
+  private touches = new Map<number, { x: number; y: number; t: number }>();
 
   constructor(el: HTMLElement) {
-    this.el = el;
     window.addEventListener('keydown', this.onKeyDown);
-    window.addEventListener('keyup', this.onKeyUp);
     el.addEventListener('pointerdown', this.onPointerDown);
     el.addEventListener('pointerup', this.onPointerUp);
-    el.addEventListener('pointercancel', this.onPointerUp);
+    el.addEventListener('pointercancel', this.onPointerCancel);
     el.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
@@ -44,16 +38,16 @@ export class Input {
     switch (e.code) {
       case 'ArrowLeft':
       case 'KeyA':
-        this.keyLeft = true;
+        this.runDir = -1;
         break;
       case 'ArrowRight':
       case 'KeyD':
-        this.keyRight = true;
+        this.runDir = 1;
         break;
       case 'Space':
       case 'ArrowUp':
       case 'KeyW':
-        this.pressJump();
+        this.jumpPressedAt = performance.now();
         e.preventDefault();
         break;
       case 'ShiftLeft':
@@ -64,67 +58,38 @@ export class Input {
         this.onPause?.();
         break;
     }
-    this.updateAxis();
   };
-
-  private onKeyUp = (e: KeyboardEvent): void => {
-    switch (e.code) {
-      case 'ArrowLeft':
-      case 'KeyA':
-        this.keyLeft = false;
-        break;
-      case 'ArrowRight':
-      case 'KeyD':
-        this.keyRight = false;
-        break;
-    }
-    this.updateAxis();
-  };
-
-  private zoneFor(e: PointerEvent): string {
-    const r = this.el.getBoundingClientRect();
-    const cx = r.left + r.width / 2;
-    const cy = r.top + r.height / 2;
-    const dx = e.clientX - cx;
-    const dy = e.clientY - cy;
-    const jumpR = Math.min(r.width, r.height) * 0.2; // center 40% = jump
-    if (Math.hypot(dx, dy) < jumpR) return 'jump';
-    let side = dx < 0 ? 'left' : 'right';
-    if (this.leftHanded) side = side === 'left' ? 'right' : 'left';
-    return side;
-  }
 
   private onPointerDown = (e: PointerEvent): void => {
     this.onAnyInput?.();
-    const zone = this.zoneFor(e);
-    this.activeZones.set(e.pointerId, zone);
-    if (zone === 'jump') this.pressJump();
-    else if (zone === 'left') this.touchLeft++;
-    else this.touchRight++;
-    this.updateAxis();
+    this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now() });
   };
 
   private onPointerUp = (e: PointerEvent): void => {
-    const zone = this.activeZones.get(e.pointerId);
-    this.activeZones.delete(e.pointerId);
-    if (zone === 'left') this.touchLeft = Math.max(0, this.touchLeft - 1);
-    else if (zone === 'right') this.touchRight = Math.max(0, this.touchRight - 1);
-    this.updateAxis();
+    const start = this.touches.get(e.pointerId);
+    this.touches.delete(e.pointerId);
+    if (!start) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    const dt = performance.now() - start.t;
+    const dist = Math.hypot(dx, dy);
+
+    if (dist <= TUNING.TAP_SLOP_PX && dt <= TUNING.TAP_MAX_MS) {
+      this.jumpPressedAt = performance.now();
+      return;
+    }
+    if (dist < TUNING.SWIPE_MIN_PX) return;
+    if (Math.abs(dy) > Math.abs(dx)) {
+      if (dy < 0) this.dashPressedAt = performance.now(); // swipe up
+      // swipe down: ignored (reserved)
+    } else {
+      this.runDir = dx > 0 ? 1 : -1;
+    }
   };
 
-  private pressJump(): void {
-    const now = performance.now();
-    // double-tap jump = dash
-    if (now - this.lastJumpTapAt < 260) this.dashPressedAt = now;
-    this.lastJumpTapAt = now;
-    this.jumpPressedAt = now;
-  }
-
-  private updateAxis(): void {
-    const l = this.keyLeft || this.touchLeft > 0;
-    const r = this.keyRight || this.touchRight > 0;
-    this.axis = (r ? 1 : 0) - (l ? 1 : 0);
-  }
+  private onPointerCancel = (e: PointerEvent): void => {
+    this.touches.delete(e.pointerId);
+  };
 
   /** jump requested within the input buffer window? */
   jumpBuffered(): boolean {
@@ -146,17 +111,20 @@ export class Input {
   clear(): void {
     this.jumpPressedAt = -Infinity;
     this.dashPressedAt = -Infinity;
+    this.touches.clear();
   }
 }
 
 /* ------------------------------------------------------------------ */
-/*  The Shard: polar physics                                            */
+/*  The Climber: polar physics with auto-run and ledge grabs            */
 /* ------------------------------------------------------------------ */
 
 export interface ShardEvents {
   onJump?: () => void;
   onDash?: () => void;
   onLand?: (ring: number) => void;
+  /** grabbed a ledge and is pulling up onto ring k */
+  onGrab?: (ring: number) => void;
   /** left a ring after standing standDur seconds (skim if < window) */
   onLeave?: (standDur: number) => void;
   onMote?: (count: number) => void;
@@ -171,7 +139,7 @@ export class Shard {
   theta = 0;
   /** inherited angular velocity while airborne, rad/s */
   angVel = 0;
-  /** eased tangential input velocity, rad/s */
+  /** eased auto-run velocity, rad/s (world theta terms) */
   moveVel = 0;
   onRing = true;
   ringK = 0;
@@ -179,6 +147,13 @@ export class Shard {
   alive = true;
   dashUsed = false;
   intangibleT = 0;
+  /** 0..1 while pulling up onto a ledge; <0 when not grabbing */
+  grabT = -1;
+  /** total tangential angular velocity this frame (for the animator) */
+  tangentOmega = 0;
+  private grabRing = 0;
+  private grabFromTheta = 0;
+  private grabToTheta = 0;
   private coyoteT = 0;
 
   reset(): void {
@@ -193,7 +168,12 @@ export class Shard {
     this.alive = true;
     this.dashUsed = false;
     this.intangibleT = 0;
+    this.grabT = -1;
     this.coyoteT = 0;
+  }
+
+  get grabbing(): boolean {
+    return this.grabT >= 0;
   }
 
   update(
@@ -209,20 +189,39 @@ export class Shard {
     this.intangibleT = Math.max(0, this.intangibleT - dt);
     this.coyoteT = Math.max(0, this.coyoteT - dt);
 
+    // --- ledge pull-up: scripted, then stand ---
+    if (this.grabbing) {
+      this.tangentOmega = (this.grabToTheta - this.grabFromTheta) / TUNING.GRAB_PULL_S;
+      this.grabT += dt / TUNING.GRAB_PULL_S;
+      const t = Math.min(1, this.grabT);
+      const e = t * t * (3 - 2 * t);
+      this.theta = this.grabFromTheta + (this.grabToTheta - this.grabFromTheta) * e;
+      this.depth = this.grabRing * S - (1 - e) * 1.4; // hangs just below, pulls up
+      if (this.grabT >= 1) {
+        this.grabT = -1;
+        this.land(this.grabRing, ev);
+      }
+      return;
+    }
+
     const ring = field.rings.get(this.ringK);
     const ringOmega = ring ? ring.omega * field.dirFlip * ringSpeedMul : 0;
+    // auto-run: screen-clockwise = negative theta
+    const dirTheta = -input.runDir;
+    const runSpeed = Math.max(TUNING.RUN_SPEED_MIN, Math.abs(ringOmega) * TUNING.RUN_SPEED_REL);
 
-    // --- tangential movement (eased); right input = clockwise on screen ---
+    // --- tangential motion ---
     if (this.onRing) {
-      const maxRel = TUNING.MOVE_MAX_REL * Math.max(0.25, Math.abs(ringOmega));
-      const target = -input.axis * maxRel;
-      const rate = maxRel / TUNING.MOVE_EASE_S;
+      const target = dirTheta * runSpeed;
+      const rate = runSpeed / TUNING.MOVE_EASE_S;
       this.moveVel = approach(this.moveVel, target, rate * dt);
-      this.theta += (ringOmega + this.moveVel) * dt;
+      this.tangentOmega = ringOmega + this.moveVel;
+      this.theta += this.tangentOmega * dt;
     } else {
-      const target = -input.axis * TUNING.AIR_STEER;
-      this.moveVel = approach(this.moveVel, target, (TUNING.AIR_STEER / TUNING.MOVE_EASE_S) * dt);
-      this.theta += (this.angVel + this.moveVel) * dt;
+      const target = dirTheta * TUNING.AIR_DRIFT;
+      this.moveVel = approach(this.moveVel, target, (TUNING.AIR_DRIFT / TUNING.MOVE_EASE_S) * dt);
+      this.tangentOmega = this.angVel + this.moveVel;
+      this.theta += this.tangentOmega * dt;
     }
 
     // --- standing support / hazards ---
@@ -234,7 +233,7 @@ export class Shard {
         return;
       }
       if (s === SAMPLE_NONE) {
-        // walked/rotated off the edge: start falling, grant coyote time
+        // ran off the edge: start falling, grant coyote time
         this.onRing = false;
         this.vel = 0;
         this.angVel = ringOmega + this.moveVel;
@@ -288,6 +287,19 @@ export class Shard {
           if (s === SAMPLE_PLATFORM) {
             this.land(k, ev);
             break;
+          }
+          // just missed: the climber catches the ledge and pulls up
+          const dTheta = field.grabEdge(k, this.theta, wedge);
+          if (dTheta !== null) {
+            this.grabT = 0;
+            this.grabRing = k;
+            this.grabFromTheta = this.theta;
+            this.grabToTheta = this.theta + dTheta;
+            this.vel = 0;
+            this.depth = plane - 1.4;
+            this.moveVel = 0;
+            ev.onGrab?.(k);
+            return;
           }
         }
       }
