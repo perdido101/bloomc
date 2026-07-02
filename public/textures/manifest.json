@@ -1,0 +1,6 @@
+{
+  "GLACIA":  { "a": "glacia_a.jpg",  "b": "glacia_b.jpg"  },
+  "NEBULA":  { "a": "nebula_a.jpg",  "b": "nebula_b.jpg"  },
+  "INFERNA": { "a": "inferna_a.jpg", "b": "inferna_b.jpg" },
+  "VERDANT": { "a": "verdant_a.jpg", "b": "verdant_b.jpg" }
+}

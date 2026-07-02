@@ -1,0 +1,11 @@
+{
+  "name": "VORTIKA",
+  "short_name": "VORTIKA",
+  "description": "A high-score endless platformer inside a living kaleidoscope.",
+  "start_url": ".",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#04060f",
+  "theme_color": "#0b1440",
+  "icons": []
+}

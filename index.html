@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1440" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <title>VORTIKA</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #04060f; }
+    body { font-family: Georgia, 'Times New Roman', serif; color: #cfe8ff;
+           -webkit-user-select: none; user-select: none; touch-action: none; }
+    #app { position: fixed; inset: 0; }
+    #app canvas { display: block; }
+
+    #ui { position: fixed; inset: 0; pointer-events: none; }
+    .panel {
+      position: absolute; inset: 0; display: none;
+      flex-direction: column; align-items: center; justify-content: center;
+      gap: 3vh; text-align: center; pointer-events: auto;
+    }
+    .panel.show { display: flex; }
+
+    @keyframes breathe {
+      0%, 100% { letter-spacing: 0.55em; opacity: 0.92; }
+      50% { letter-spacing: 0.72em; opacity: 1; }
+    }
+    #wordmark {
+      font-size: min(9vw, 64px); font-weight: 300; color: #eaffff;
+      letter-spacing: 0.55em; text-indent: 0.55em;
+      text-shadow: 0 0 24px #27c8f0, 0 0 64px #27c8f088;
+      animation: breathe 6s ease-in-out infinite;
+    }
+    .hint { font-size: min(4vw, 18px); opacity: 0.75; letter-spacing: 0.3em;
+            animation: breathe 3s ease-in-out infinite; }
+    .strip { font-size: min(3.2vw, 14px); opacity: 0.6; letter-spacing: 0.12em; line-height: 1.9; }
+    .strip b { color: #eaffff; font-weight: normal; }
+
+    .toggles { display: flex; gap: 2.5em; font-size: min(3.2vw, 14px); opacity: 0.75; }
+    .toggles label { cursor: pointer; letter-spacing: 0.1em; display: flex; gap: 0.5em; align-items: center; }
+
+    #gameover h2 { font-size: min(7vw, 44px); font-weight: 300; letter-spacing: 0.4em; text-indent: 0.4em;
+                   color: #ffdcf2; text-shadow: 0 0 20px currentColor; }
+    #goScore { font-size: min(12vw, 80px); font-weight: 300; color: #eaffff;
+               text-shadow: 0 0 30px #27c8f0; letter-spacing: 0.08em; }
+    #goStats { font-size: min(3.6vw, 16px); opacity: 0.75; letter-spacing: 0.15em; line-height: 2; }
+    #goSeed { font-size: min(3vw, 13px); opacity: 0.5; letter-spacing: 0.1em; }
+    #goSeed a { color: #9fdcff; text-decoration: none; border-bottom: 1px dotted #9fdcff66; }
+    @keyframes bestflash {
+      0% { transform: scale(0.6); opacity: 0; }
+      30% { transform: scale(1.25); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    #newBest { display: none; font-size: min(5vw, 26px); letter-spacing: 0.5em; text-indent: 0.5em;
+               color: #ffe9b0; text-shadow: 0 0 24px #ff7a1a, 0 0 60px #ffe9b0; }
+    #newBest.show { display: block; animation: bestflash 0.9s ease-out; }
+
+    #pauseBtn {
+      position: absolute; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right));
+      width: 44px; height: 44px; display: none; pointer-events: auto;
+      background: none; border: none; color: #cfe8ff; font-size: 26px; opacity: 0.45; cursor: pointer;
+      text-shadow: 0 0 12px currentColor;
+    }
+    #pauseBtn.show { display: block; }
+    #pauseVeil { background: rgba(2, 4, 12, 0.72); backdrop-filter: blur(2px); }
+    #pauseVeil h2 { font-size: min(6vw, 36px); font-weight: 300; letter-spacing: 0.5em; text-indent: 0.5em; }
+
+    .fade { transition: opacity 0.5s ease; }
+    #bootMsg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+               font-size: 14px; letter-spacing: 0.4em; opacity: 0.5; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="ui">
+    <div id="bootMsg">V O R T I K A</div>
+
+    <div id="title" class="panel">
+      <div id="wordmark">VORTIKA</div>
+      <div class="hint">TAP TO BEGIN</div>
+      <div id="scoreStrip" class="strip"></div>
+      <div class="toggles">
+        <label><input type="checkbox" id="optFlash" /> reduce flash</label>
+        <label><input type="checkbox" id="optSound" checked /> sound</label>
+        <label><input type="checkbox" id="optLeft" /> left-handed</label>
+      </div>
+    </div>
+
+    <div id="gameover" class="panel">
+      <div id="newBest">NEW BEST</div>
+      <h2>DISSOLVED</h2>
+      <div id="goScore">0</div>
+      <div id="goStats"></div>
+      <div id="goSeed"></div>
+      <div class="hint">TAP TO DESCEND AGAIN</div>
+    </div>
+
+    <div id="pauseVeil" class="panel">
+      <h2>SUSPENDED</h2>
+      <div class="hint">TAP TO RESUME</div>
+      <div class="toggles">
+        <label><input type="checkbox" id="optFlash2" /> reduce flash</label>
+        <label><input type="checkbox" id="optSound2" checked /> sound</label>
+        <label><input type="checkbox" id="optLeft2" /> left-handed</label>
+      </div>
+    </div>
+
+    <button id="pauseBtn" aria-label="pause">◈</button>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
