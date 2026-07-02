@@ -1,5 +1,5 @@
 import { TUNING } from './difficulty';
-import { XorShift, hashSeed } from './rings';
+import { XorShift, hashSeed } from './track';
 
 /**
  * Addendum 1: Infinite Pattern DNA. The fixed phase table is gone — every

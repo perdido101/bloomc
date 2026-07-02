@@ -2,6 +2,7 @@ import { TUNING } from './difficulty';
 
 export interface RunRecord {
   score: number;
+  /** distance run, whole world units ("meters") */
   depth: number;
   blooms: number;
   combo: number;
@@ -15,46 +16,48 @@ export class Scoring {
   score = 0;
   combo = 1;
   bestCombo = 1;
-  deepestRing = 0;
+  /** distance run, world units */
+  distance = 0;
   blooms = 0;
-  motes = 0;
-  /** true for one frame after a skim (HUD/audio feedback) */
-  private maxLanded = 0;
+  coins = 0;
+
+  private distCarry = 0;
 
   reset(): void {
     this.score = 0;
     this.combo = 1;
     this.bestCombo = 1;
-    this.deepestRing = 0;
+    this.distance = 0;
     this.blooms = 0;
-    this.motes = 0;
-    this.maxLanded = 0;
+    this.coins = 0;
+    this.distCarry = 0;
   }
 
-  /** passed ring k. Door passes build the combo; jump/dash passes keep it. */
-  onPass(ring: number, viaDoor: boolean): void {
-    if (ring > this.maxLanded) {
-      this.maxLanded = ring;
-      this.deepestRing = ring;
-      this.score += TUNING.DEPTH_SCORE;
-    }
-    if (viaDoor) {
-      this.combo = Math.min(TUNING.COMBO_MAX, this.combo + 1);
-      this.bestCombo = Math.max(this.bestCombo, this.combo);
+  /** every world unit run scores — the metronome of the game */
+  addDistance(units: number): void {
+    this.distance += units;
+    this.distCarry += units * TUNING.DIST_SCORE;
+    const whole = Math.floor(this.distCarry);
+    if (whole > 0) {
+      this.distCarry -= whole;
+      this.score += whole;
     }
   }
 
-  /** grazed a doorway edge — style points ×combo */
-  onGraze(): number {
-    const pts = 15 * this.combo;
+  /** cleanly passed an obstacle event — builds the combo */
+  onPass(closeCall: boolean): number {
+    this.combo = Math.min(TUNING.COMBO_MAX, this.combo + 1);
+    this.bestCombo = Math.max(this.bestCombo, this.combo);
+    if (!closeCall) return 0;
+    const pts = TUNING.CLOSE_CALL_SCORE * this.combo;
     this.score += pts;
     return pts;
   }
 
-  onMote(count: number): number {
-    const pts = count * TUNING.MOTE_SCORE * this.combo;
+  onCoin(count: number): number {
+    const pts = count * TUNING.COIN_SCORE * this.combo;
     this.score += pts;
-    this.motes += count;
+    this.coins += count;
     return pts;
   }
 
@@ -73,7 +76,7 @@ export class Scoring {
   record(seed: string): RunRecord {
     return {
       score: this.score,
-      depth: this.deepestRing,
+      depth: Math.round(this.distance),
       blooms: this.blooms,
       combo: this.bestCombo,
       seed,

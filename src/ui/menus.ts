@@ -181,7 +181,7 @@ export class Menus {
       .map(
         (s, i) =>
           `<span class="rank">${i + 1}.</span><b>${s.score}</b>` +
-          ` · ring ${s.depth} · ${s.blooms}✿ · ×${s.combo}`
+          ` · ${s.depth}m · ${s.blooms}✿ · ×${s.combo}`
       )
       .join('<br/>');
   }
@@ -196,7 +196,7 @@ export class Menus {
     this.gameover.classList.add('show');
     el<HTMLDivElement>('newBest').classList.toggle('show', isBest);
     el<HTMLDivElement>('goStats').innerHTML =
-      `deepest ring <b>${rec.depth}</b> · blooms survived <b>${rec.blooms}</b> · best combo <b>×${rec.combo}</b>`;
+      `ran <b>${rec.depth}m</b> · blooms survived <b>${rec.blooms}</b> · best combo <b>×${rec.combo}</b>`;
     const url = new URL(location.href);
     url.searchParams.set('seed', rec.seed);
     el<HTMLDivElement>('goSeed').innerHTML =

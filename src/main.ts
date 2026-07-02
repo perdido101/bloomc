@@ -4,17 +4,17 @@ import { TUNING } from './game/difficulty';
 import { GameState, StateMachine } from './game/state';
 import {
   PhaseManager, generateDNA, sanitize,
-  type PhaseDNA, type RuleBreakerType,
+  type PhaseDNA,
 } from './game/phases';
-import { RingField, hashSeed, type WorldGen } from './game/rings';
-import { Input, Runner, type RunnerEvents } from './game/player';
+import { TrackField, hashSeed, type WorldGen } from './game/track';
+import { Input, Runner, type CrashCause, type RunnerEvents } from './game/player';
 import { Scoring, saveHighScore } from './game/scoring';
 import { PaletteLut } from './render/palette';
 import { getPhaseTextures, initTextures } from './render/textures';
-import { BackgroundPass } from './render/background';
-import { MirrorPass, WedgePass } from './render/kaleidoscope';
+import { CavePass } from './render/cave';
 import { PostChain } from './render/post';
-import { ShardVisual } from './render/shard';
+import { WorldLayer, project, type Cam, type Projected } from './render/world';
+import { RunnerVisual, type RunnerPose } from './render/runnerVisual';
 import { Particles } from './render/particles';
 import { Hud } from './ui/hud';
 import { Menus } from './ui/menus';
@@ -33,9 +33,7 @@ function randomSeed(): string {
 
 interface Pipeline {
   sceneRT: RenderTexture;
-  bg: BackgroundPass;
-  wedge: WedgePass;
-  mirror: MirrorPass;
+  cave: CavePass;
   post: PostChain;
   playerLayer: Container;
   destroy(): void;
@@ -50,10 +48,11 @@ class Game {
   private input!: Input;
   private fsm = new StateMachine();
   private pm: PhaseManager;
-  private field!: RingField;
+  private track!: TrackField;
   private runner = new Runner();
   private scoring = new Scoring();
-  private shardVisual!: ShardVisual;
+  private worldLayer!: WorldLayer;
+  private runnerVisual!: RunnerVisual;
   private particles!: Particles;
 
   private seedStr = randomSeed();
@@ -67,10 +66,8 @@ class Game {
   private oy = 0;
   private dpr = 1;
 
-  // camera + view (the wisp is pinned to the bottom; steering rotates
-  // the tunnel: viewRot chases -theta - PI/2)
-  private camDepth = 0;
-  private viewRot = 0;
+  // camera: behind the runner, chasing their lane
+  private readonly cam: Cam = { x: 0, y: TUNING.CAM_H, z: -TUNING.CAM_Z0 };
 
   // fx state
   private time = 0;
@@ -78,7 +75,6 @@ class Game {
   private caSpike = 0;
   private ripple = 0;
   private zoom = 0;
-  private bgSeed = 7.3;
   private deathT = 0;
   private deathCx = 0.5;
   private deathCy = 0.5;
@@ -86,14 +82,12 @@ class Game {
   private readonly vigColor = new Float32Array(3);
   private hudColorRev = -1;
   private wmTintRev = -1;
-  private dashVisT = 0;
-  /** rings fade out behind the main menu (subtle background only) */
+  /** the cave dims to a whisper behind the main menu */
   private worldAlpha = 1;
   /** smoothed ink-mode amount (settings toggle, eased) */
   private inkAmt = 0;
   // escalation / DNA state
   private hueShift = 0;
-  private fisheyeExp: number = TUNING.FISHEYE_EXP;
   private tierDipT = 0;
   private strobeFlip = false;
   private galleryEvery = 0; // >0 = gallery mode (?gallery), seconds per DNA
@@ -102,27 +96,13 @@ class Game {
   private galleryHues: number[] = [];
   private readonly worldGen: WorldGen = {
     gapScale: 1, hazardDensity: 1, tier: 0, layoutStyle: 'even-gaps',
-    wedge: Math.PI / 4,
-  };
-  private readonly bgParams = {
-    time: 0, seed: 7.3, phaseMix: 0, noiseType: 0, noiseScale: 3,
-    warp: 0.6, blendMode: 0, drift: 1, feedback: 0, nestedFold: 0,
-  };
-  private readonly wedgeOpts = {
-    wedge: Math.PI / 4, time: 0, beat: 0, texMix: 0, platStyle: 0,
-    hazStyle: 0, hazColor: new Float32Array(3), wobbleAmp: 0,
-    wobbleFreq: 1, spiralFlow: 0,
   };
   private wordmark!: WordmarkFX;
   private wordmarkEl: HTMLElement | null = null;
-  private readonly climberPose = {
-    x: 0, y: 0, posAngle: 0, omega: 0,
-    state: 'run' as import('./render/shard').ClimberState,
-    grabT: -1, size: 0.06,
-  };
+  private readonly proj: Projected = { px: 0, py: 0, k: 0, dz: 0 };
 
   // attract mode
-  private attractDepth = 30;
+  private attractZ = 0;
 
   // frame bookkeeping
   private lastNow = 0;
@@ -130,40 +110,24 @@ class Game {
   private paused = false;
   private resizeTimer = 0;
 
-  private readonly mapDepth = (d: number): number => {
-    const o = (d - this.camDepth) / TUNING.RING_SPACING;
-    const n = Math.min(1, Math.max(0, (TUNING.DEPTH_MAP_A - o) / TUNING.DEPTH_MAP_B));
-    return Math.pow(n, this.fisheyeExp);
-  };
-
   private readonly runnerEvents: RunnerEvents = {
-    onPass: (k, viaDoor, graze) => {
-      this.scoring.onPass(k, viaDoor);
+    onLane: () => audio.playSfx('skim'),
+    onJump: () => audio.playSfx('jump'),
+    onRoll: () => audio.playSfx('grab'),
+    onPass: (closeCall) => {
+      const pts = this.scoring.onPass(closeCall);
       audio.playSfx('land');
-      const sp = this.shardClipPos();
-      this.particles.burst(sp[0], sp[1], viaDoor ? 8 : 12, 0.45, 0.4, 0.015, 0.85, 0.95, 1);
-      this.shardVisual.squash = viaDoor ? 0.35 : 0.7;
-      if (graze) {
-        this.scoring.onGraze();
+      if (closeCall && pts > 0) {
         audio.playSfx('skim');
-        this.particles.burst(sp[0], sp[1], 16, 0.7, 0.5, 0.017, 1, 0.9, 0.6);
+        const [x, y] = this.runnerClip();
+        this.particles.burst(x, y, 14, 0.6, 0.5, 0.016, 1, 0.9, 0.6);
       }
     },
-    onJump: () => audio.playSfx('jump'),
-    onDash: () => {
-      audio.playSfx('dash');
-      this.dashVisT = 0.25;
-      this.caSpike = 1;
-      this.ripple = Math.max(this.ripple, 0.55);
-      const sp = this.shardClipPos();
-      this.particles.burst(sp[0], sp[1], 26, 0.9, 0.5, 0.02, 0.7, 0.9, 1);
-    },
-    onBrake: () => audio.playSfx('grab'),
-    onMote: (n) => {
-      this.scoring.onMote(n);
+    onCoin: (n) => {
+      this.scoring.onCoin(n);
       audio.playSfx('mote');
-      const sp = this.shardClipPos();
-      this.particles.burst(sp[0], sp[1], 16, 0.5, 0.6, 0.017, 0.65, 1, 0.9);
+      const [x, y] = this.runnerClip();
+      this.particles.burst(x, y - 0.12, 14, 0.5, 0.55, 0.016, 0.65, 1, 0.9);
     },
     onDie: (cause) => this.beginDeath(cause),
   };
@@ -175,12 +139,7 @@ class Game {
         audio.playSfx('bloom');
         const cur = getPhaseTextures(from.texId);
         const nxt = getPhaseTextures(to.texId);
-        this.pipeline.wedge.setTextures(cur.sourceA, nxt.sourceA);
-        this.pipeline.bg.setTextures(cur.sourceB, nxt.sourceB);
-      },
-      onBloomMid: () => {
-        this.field.dirFlip = this.pm.dirFlip;
-        this.bgSeed = (this.bgSeed * 16807) % 97 + 1; // flow field reseeds
+        this.pipeline.cave.setTextures(cur.sourceA, nxt.sourceA);
       },
       onBloomEnd: (blooms) => {
         if (this.fsm.is(GameState.BLOOM_TRANSITION)) this.fsm.set(GameState.RUN);
@@ -190,8 +149,7 @@ class Game {
         audio.setPhase(this.pm.current.texId);
         audio.setMusicKey(this.pm.current.palette.baseHue, this.pm.tier, this.pm.current.lull);
         const tex = getPhaseTextures(this.pm.current.texId);
-        this.pipeline.wedge.setTextures(tex.sourceA, tex.sourceA);
-        this.pipeline.bg.setTextures(tex.sourceB, tex.sourceB);
+        this.pipeline.cave.setTextures(tex.sourceA, tex.sourceA);
       },
       onTierUp: (tier, name) => {
         if (!this.fsm.playing) return;
@@ -201,8 +159,7 @@ class Game {
         this.scoring.addBonus(1000);
         audio.playSfx('tier');
       },
-      onRuleBreaker: (type: RuleBreakerType) => {
-        // telegraphed by a golden ring flash
+      onRuleBreaker: (type) => {
         this.ripple = Math.max(this.ripple, 0.8);
         this.caSpike = Math.max(this.caSpike, 0.4);
         console.log(`[rule-breaker] ${type}`);
@@ -289,7 +246,7 @@ class Game {
     }
 
     // attract-mode world behind the title
-    this.field = new RingField(hashSeed('attract'));
+    this.track = new TrackField(hashSeed('attract'));
     this.pm.reduceFlash = this.menus.settings.reduceFlash;
     this.pm.reset(hashSeed('attract'));
     this.menus.hideBoot();
@@ -312,7 +269,7 @@ class Game {
     kill: () => {
       if (this.fsm.playing && this.runner.alive) {
         this.runner.alive = false;
-        this.beginDeath('wall');
+        this.beginDeath('gate');
       }
     },
   };
@@ -322,14 +279,13 @@ class Game {
     d.state = this.fsm.state;
     d.score = this.scoring.score;
     d.combo = this.scoring.combo;
-    d.ringK = this.runner.ringK;
+    d.lane = this.runner.lane;
     d.depth = this.runner.z;
-    d.onRing = true;
+    d.speed = this.runner.speed;
     d.alive = this.runner.alive;
     d.blooms = this.pm.bloomsDone;
     d.seed = this.seedStr;
     d.runTime = this.pm.runTime;
-    d.grabbing = false;
     d.tier = this.pm.tier;
     d.bloomIdx = this.pm.current?.index;
     d.visualLoad = this.pm.current?.visualLoad;
@@ -337,22 +293,30 @@ class Game {
     d.baseHue = this.pm.current?.palette.baseHue;
     d.ruleBreaker = this.pm.ruleBreaker?.type ?? null;
     d.galleryHues = this.galleryHues;
-    // climber position in CSS px (for the test harness)
-    d.px = (this.ox + (this.climberPose.x * 0.5 + 0.5) * this.square) / this.dpr;
-    d.py = (this.oy + (-this.climberPose.y * 0.5 + 0.5) * this.square) / this.dpr;
-    d.poseState = this.climberPose.state;
+    // runner position in CSS px (for the test harness)
+    if (project(this.cam, this.square, this.runner.x, this.runner.y, this.runner.z, this.proj)) {
+      d.px = (this.ox + this.proj.px) / this.dpr;
+      d.py = (this.oy + this.proj.py) / this.dpr;
+    }
+    d.poseState = this.runnerPose();
+  }
+
+  private runnerPose(): RunnerPose {
+    return this.runner.rolling ? 'roll' : this.runner.airborne ? 'jump' : 'run';
   }
 
   private computeLayout(): void {
     this.pw = Math.round(window.innerWidth * this.dpr);
     this.ph = Math.round(window.innerHeight * this.dpr);
-    this.square = Math.min(this.pw, this.ph, 1440);
+    // the cave fills the WHOLE screen: the world square covers the larger
+    // dimension and the sides crop naturally (portrait shows a tall slice)
+    this.square = Math.min(Math.max(this.pw, this.ph), 1440);
     this.ox = (this.pw - this.square) / 2;
     this.oy = (this.ph - this.square) / 2;
     this.hud.layout(
       window.innerWidth / 2,
       window.innerHeight / 2,
-      this.square / this.dpr
+      Math.min(this.pw, this.ph) / this.dpr
     );
   }
 
@@ -360,19 +324,23 @@ class Game {
     const S = this.square;
     const glacia = getPhaseTextures('GLACIA');
     const sceneRT = RenderTexture.create({ width: S, height: S });
-    const bg = new BackgroundPass(S >> 1, glacia.sourceB, this.lut.texture);
-    const wedge = new WedgePass(S, glacia.sourceA, this.lut.texture);
-    const mirror = new MirrorPass(wedge.rt, bg.rt);
+    const cave = new CavePass(glacia.sourceA, this.lut.texture);
     const post = new PostChain(sceneRT, S);
-    this.shardVisual = new ShardVisual();
+    this.worldLayer = new WorldLayer();
+    this.runnerVisual = new RunnerVisual();
     this.particles = new Particles();
     const playerLayer = new Container();
-    playerLayer.addChild(this.particles.mesh, this.shardVisual.root);
+    // scene-graph content renders y-flipped into RenderTextures relative
+    // to the raw clip-space passes — counter-flip the Graphics layers
+    // (the particle mesh writes clip coords directly and needs none)
+    const gfxLayer = new Container();
+    gfxLayer.addChild(this.worldLayer.gfx, this.runnerVisual.root);
+    gfxLayer.scale.y = -1;
+    gfxLayer.position.y = S;
+    playerLayer.addChild(gfxLayer, this.particles.mesh);
     this.pipeline = {
       sceneRT,
-      bg,
-      wedge,
-      mirror,
+      cave,
       post,
       playerLayer,
       destroy() {
@@ -382,8 +350,7 @@ class Game {
     };
     // restore current phase textures
     const tex = getPhaseTextures(this.pm.current?.texId ?? 'GLACIA');
-    wedge.setTextures(tex.sourceA, tex.sourceA);
-    bg.setTextures(tex.sourceB, tex.sourceB);
+    cave.setTextures(tex.sourceA, tex.sourceA);
   }
 
   private onResize(): void {
@@ -397,40 +364,40 @@ class Game {
   private startRun(): void {
     audio.init();
     this.seedStr = this.urlSeed ?? randomSeed();
-    this.field = new RingField(hashSeed(this.seedStr));
+    this.track = new TrackField(hashSeed(this.seedStr));
     this.pm.reduceFlash = this.menus.settings.reduceFlash;
     this.pm.reset(hashSeed(this.seedStr));
     this.scoring.reset();
     this.runner.reset();
     this.hud.reset();
     this.particles.clear();
-    this.camDepth = this.runner.z;
+    this.runnerVisual.reset();
     this.zoom = 0;
     this.ripple = 0;
     this.newBestPending = false;
-    this.field.dirFlip = 1;
     this.hueShift = 0;
     this.input.clear();
     const tex = getPhaseTextures(this.pm.current.texId);
-    this.pipeline.wedge.setTextures(tex.sourceA, tex.sourceA);
-    this.pipeline.bg.setTextures(tex.sourceB, tex.sourceB);
+    this.pipeline.cave.setTextures(tex.sourceA, tex.sourceA);
     audio.setPhase(this.pm.current.texId);
     audio.setScene('game');
     audio.setMusicKey(this.pm.current.palette.baseHue, this.pm.tier, this.pm.current.lull);
-    // build the opening window now and spawn standing on solid floor,
-    // not over a doorway
-    const cur = this.pm.current;
-    this.worldGen.gapScale = cur.gapScale;
-    this.worldGen.hazardDensity = cur.hazardDensity;
-    this.worldGen.tier = cur.tier;
-    this.worldGen.layoutStyle = cur.layoutStyle;
-    this.worldGen.wedge = TWO_PI / cur.mirrorN;
-    this.field.ensureWindow(TUNING.RING_WINDOW, this.worldGen, this.pm.intensityGame);
-    this.viewRot = -this.runner.theta - Math.PI / 2; // pin to the bottom
-    const [x, y] = this.shardClipPos();
-    this.shardVisual.reset(x, y);
+    this.syncWorldGen();
+    this.track.ensure(TUNING.HORIZON_Z, this.worldGen, this.pm.intensityGame);
+    this.cam.x = 0;
+    this.cam.y = TUNING.CAM_H;
+    this.cam.z = -TUNING.CAM_Z0;
     this.menus.showRun();
     this.fsm.set(GameState.RUN);
+  }
+
+  /** gameplay knobs from the active DNA (gapScale inverts: DNA-hard = tight gaps) */
+  private syncWorldGen(): void {
+    const active = this.pm.active;
+    this.worldGen.gapScale = 2 - active.gapScale;
+    this.worldGen.hazardDensity = active.hazardDensity;
+    this.worldGen.tier = active.tier;
+    this.worldGen.layoutStyle = active.layoutStyle;
   }
 
   private togglePause(): void {
@@ -445,26 +412,17 @@ class Game {
     }
   }
 
-  private beginDeath(cause: 'wall' | 'hazard'): void {
-    audio.playSfx(cause === 'hazard' ? 'hazard' : 'death');
+  private beginDeath(cause: CrashCause): void {
+    audio.playSfx(cause === 'laser' ? 'hazard' : 'death');
     audio.playSfx('death');
     this.caSpike = 1;
     this.deathT = 0;
-    const sp = this.shardClipPos();
-    const x = sp[0];
-    const y = sp[1];
+    const [x, y] = this.runnerClip();
     this.deathCx = x * 0.5 + 0.5;
     this.deathCy = y * 0.5 + 0.5;
-    // shatter into mirrored fragments, absorbed into the mandala
-    const n = this.pm.active.mirrorN;
-    const r = Math.hypot(x, y);
-    const baseA = Math.atan2(y, x);
-    for (let m = 0; m < n; m++) {
-      const a = baseA + (m * TWO_PI) / n;
-      const fx = Math.cos(a) * r;
-      const fy = Math.sin(a) * r;
-      this.particles.burst(fx, fy, 10, 0.6, 1.6, 0.022, 1, 0.95, 0.9, 2.2);
-    }
+    // the runner shatters into light
+    this.particles.burst(x, y, 26, 0.8, 1.4, 0.02, 1, 0.95, 0.9);
+    this.particles.burst(x, y, 18, 0.4, 1.8, 0.024, 0.9, 0.7, 1, 1.5);
     this.fsm.set(GameState.DEATH);
   }
 
@@ -480,21 +438,16 @@ class Game {
     this.fsm.set(GameState.GAMEOVER);
   }
 
-  private readonly shardPos = new Float32Array(2);
+  private readonly clipPos = new Float32Array(2);
 
-  /** wisp position in square clip space (reuses a scratch array).
-   *  A jump arcs the wisp slightly toward the camera (outward). */
-  private shardClipPos(): Float32Array {
-    const jumpP = this.runner.jumpT > 0 ? 1 - this.runner.jumpT / TUNING.JUMP_WINDOW_S : -1;
-    const lift = jumpP >= 0 ? Math.sin(Math.PI * jumpP) * 0.055 : 0;
-    const sN = this.mapDepth(this.runner.z) + lift;
-    const a = this.runner.theta + this.viewRot;
-    this.shardPos[0] = sN * Math.cos(a);
-    this.shardPos[1] = sN * Math.sin(a);
-    return this.shardPos;
+  /** runner position in square clip space (reuses a scratch array) */
+  private runnerClip(): Float32Array {
+    if (project(this.cam, this.square, this.runner.x, this.runner.y + 0.8, this.runner.z, this.proj)) {
+      this.clipPos[0] = (this.proj.px / this.square) * 2 - 1;
+      this.clipPos[1] = 1 - (this.proj.py / this.square) * 2;
+    }
+    return this.clipPos;
   }
-
-
 
   private readonly tick = (now: number): void => {
     this.rafId = requestAnimationFrame(this.tick);
@@ -513,88 +466,59 @@ class Game {
     this.beatPulse *= Math.exp(-dt * 5);
     this.caSpike = Math.max(0, this.caSpike - dtRaw * (1000 / TUNING.CA_SPIKE_MS) * 0.001 * 5);
     this.ripple = Math.max(0, this.ripple - dtRaw * 1.6);
-    this.dashVisT = Math.max(0, this.dashVisT - dt);
-
-    // tier-up timescale dip (0.6× for 0.5s)
-    if (this.tierDipT > 0) {
-      this.tierDipT -= dtRaw;
-      // (scale was computed above; apply the dip to this frame's dt)
-    }
+    if (this.tierDipT > 0) this.tierDipT -= dtRaw;
 
     const pm = this.pm;
-    pm.depth = this.scoring.deepestRing;
+    pm.depth = Math.floor(this.scoring.distance / 10);
     const cur = pm.current;
     const nxt = pm.next;
     const mix = pm.mix;
-    const active = pm.active;
-    const wedgeCol = TWO_PI / active.mirrorN;
-    const twistCol = active.mirrorTwist;
-    const speedMul = pm.speedMul;
 
     // live palette: genome morph + hue drift (√intensity-scaled)
     const drift = lerp(cur.palette.hueDriftSpeed, nxt.palette.hueDriftSpeed, mix);
     this.hueShift = (this.hueShift + drift * Math.sqrt(pm.intensityVisual) * dt) % 360;
     this.lut.update(cur.palette, nxt.palette, mix, this.hueShift);
 
-    // fisheye breathing (tier 2+) and the inverted-fisheye rule-breaker
-    let fx = TUNING.FISHEYE_EXP;
-    if (pm.tier >= 2) fx += 0.05 * Math.sin((this.time * TWO_PI) / 9);
-    if (pm.ruleBreaker?.type === 'fisheyeInvert') {
-      fx += Math.sin((Math.PI * pm.ruleBreaker.t) / pm.ruleBreaker.dur) * 0.45;
-    }
-    this.fisheyeExp = fx;
+    this.syncWorldGen();
 
-    // gameplay knobs from the active DNA
-    this.worldGen.gapScale = active.gapScale;
-    this.worldGen.hazardDensity = active.hazardDensity;
-    this.worldGen.tier = active.tier;
-    this.worldGen.layoutStyle = active.layoutStyle;
-    this.worldGen.wedge = wedgeCol;
-
-    // rings fade away behind the main menu (splash & gameplay show them)
+    // the cave dims behind the main menu (splash & gameplay show it full)
     const wantWorld =
       this.galleryEvery > 0 ||
       !this.fsm.is(GameState.MENU) ||
       this.menus.isSplashShown
         ? 1
-        : 0.06;
+        : 0.22;
     this.worldAlpha += (wantWorld - this.worldAlpha) * Math.min(1, dtRaw * 3);
     const wantInk = this.menus.settings.ink ? 1 : 0;
     this.inkAmt += (wantInk - this.inkAmt) * Math.min(1, dtRaw * 3);
 
     if (this.fsm.is(GameState.MENU, GameState.GAMEOVER)) {
-      // attract mode: endless gentle descent (gallery rolls DNA here too)
+      // attract mode: a slow, endless glide down the cave
       if (this.galleryEvery > 0) this.galleryTick(dtRaw);
-      this.attractDepth += dt * 4;
-      this.camDepth = this.attractDepth;
-      const center = Math.max(3, Math.round(this.attractDepth / TUNING.RING_SPACING));
-      this.field.ensureWindow(center, this.worldGen, 1);
-      this.field.update(dt, 0.7);
-      this.viewRot += cur.rotationDrift * 1.5 * dt;
+      this.attractZ += dt * 3.5;
+      this.cam.x = Math.sin(this.time * 0.23) * 0.8;
+      this.cam.y = TUNING.CAM_H;
+      this.cam.z = this.attractZ;
+      this.track.ensure(this.attractZ + TUNING.HORIZON_Z, this.worldGen, 1);
+      this.track.prune(this.attractZ - 5);
     } else if (this.fsm.playing || this.fsm.is(GameState.DEATH)) {
       if (!this.paused) {
         if (this.fsm.playing) pm.update(dt);
-        this.field.update(dt, speedMul);
-        const center = Math.max(
-          TUNING.RING_WINDOW,
-          Math.floor(this.runner.z / TUNING.RING_SPACING) + 1
-        );
-        this.field.ensureWindow(center, this.worldGen, pm.intensityGame);
+        this.track.ensure(this.runner.z + TUNING.HORIZON_Z, this.worldGen, pm.intensityGame);
+        this.track.prune(this.runner.z - 12);
         if (this.fsm.playing) {
-          // forward pace: base × Bloom pace × takeoff ramp after DESCEND
-          const takeoff = Math.min(1, 0.35 + (pm.runTime / TUNING.FLY_TAKEOFF_S) * 0.65);
-          const fly = TUNING.FLY_SPEED_BASE * (0.75 + 0.25 * speedMul) * takeoff;
-          this.runner.update(
-            dt, this.input, this.field, wedgeCol, fly, this.runnerEvents, twistCol
-          );
+          // pace: gentle takeoff, then the Blooms push it
+          const takeoff = Math.min(1, 0.35 + (pm.runTime / TUNING.TAKEOFF_S) * 0.65);
+          const mult = takeoff * (0.8 + 0.2 * pm.speedMul);
+          const beforeZ = this.runner.z;
+          this.runner.update(dt, this.input, this.track, mult, this.runnerEvents);
+          this.scoring.addDistance(this.runner.z - beforeZ);
         }
-        // camera locks to the flight; steering rotates the tunnel so the
-        // wisp stays pinned at the bottom of the screen
-        this.camDepth = this.runner.z;
-        const targetRot = -this.runner.theta - Math.PI / 2;
-        let dRot = targetRot - this.viewRot;
-        dRot = ((dRot + Math.PI) % TWO_PI + TWO_PI) % TWO_PI - Math.PI;
-        this.viewRot += dRot * (1 - Math.exp(-14 * dt));
+        // camera leans a little toward the runner's lane — most of the
+        // lane change shows as the RUNNER moving across the screen
+        this.cam.x += (this.runner.x * 0.3 - this.cam.x) * (1 - Math.exp(-9 * dt));
+        this.cam.y = TUNING.CAM_H + this.runner.y * 0.22;
+        this.cam.z = this.runner.z - TUNING.CAM_Z0;
       }
 
       if (this.fsm.is(GameState.DEATH)) {
@@ -612,7 +536,7 @@ class Game {
       this.ripple = 1; // full-screen symmetric shockwave
     }
 
-    this.render(dtRaw, dt, wedgeCol, mix, cur, nxt);
+    this.render(dtRaw, dt, mix, cur, nxt);
     this.updateDebug();
   };
 
@@ -631,10 +555,8 @@ class Game {
     this.pm.current = dna;
     this.pm.next = dna;
     this.galleryHues.push(dna.palette.baseHue);
-    this.bgSeed = (this.bgSeed * 16807) % 97 + 1;
     const tex = getPhaseTextures(dna.texId);
-    this.pipeline.wedge.setTextures(tex.sourceA, tex.sourceA);
-    this.pipeline.bg.setTextures(tex.sourceB, tex.sourceB);
+    this.pipeline.cave.setTextures(tex.sourceA, tex.sourceA);
     console.log(
       `[gallery ${this.galleryIdx}] tier ${dna.tier} load ${dna.visualLoad} hue ${Math.round(dna.palette.baseHue)} hazContrast ${this.lut.hazardContrast} :: ${JSON.stringify(dna)}`
     );
@@ -643,7 +565,6 @@ class Game {
   private render(
     dtRaw: number,
     dt: number,
-    wedgeCol: number,
     mix: number,
     cur: PhaseDNA,
     nxt: PhaseDNA
@@ -651,73 +572,58 @@ class Game {
     const p = this.pipeline;
     const r = this.renderer;
     const pm = this.pm;
-    const active = pm.active;
-    const NOISE_IDX = { fbm: 0, ridged: 1, curl: 2, voronoiFlow: 3, domainWarp2x: 4 } as const;
-    const BLEND_IDX = { mix: 0, screen: 1, overlay: 2, difference: 3 } as const;
-    const PLAT_IDX = { crystal: 0, petal: 1, wave: 2, filament: 3 } as const;
-    const HAZ_IDX = { spike: 0, thorn: 1, razorPetal: 2, ember: 3 } as const;
-
-    // background driven by the active DNA
-    const bp = this.bgParams;
-    bp.time = this.time;
-    bp.seed = this.bgSeed;
-    bp.phaseMix = mix;
-    bp.noiseType = NOISE_IDX[active.noiseType];
-    bp.noiseScale = lerp(cur.noiseScale, nxt.noiseScale, mix);
-    bp.warp = lerp(cur.warpStrength, nxt.warpStrength, mix);
-    bp.blendMode =
-      pm.ruleBreaker?.type === 'diffBlend' ? 3 : BLEND_IDX[active.texBlendMode];
-    bp.drift = lerp(cur.texDriftSpeed, nxt.texDriftSpeed, mix);
-    bp.feedback = lerp(cur.flowFeedback, nxt.flowFeedback, mix);
-    bp.nestedFold = active.nestedKaleido ? TWO_PI / Math.max(2, active.mirrorN / 2) : 0;
-    p.bg.render(r, bp);
-
-    const centerK = this.fsm.is(GameState.MENU, GameState.GAMEOVER)
-      ? Math.max(3, Math.round(this.attractDepth / TUNING.RING_SPACING))
-      : Math.max(TUNING.RING_WINDOW, Math.floor(this.runner.z / TUNING.RING_SPACING) + 1);
-    const wo = this.wedgeOpts;
-    wo.wedge = wedgeCol;
-    wo.time = this.time;
-    wo.beat = this.beatPulse;
-    wo.texMix = mix;
-    wo.platStyle = PLAT_IDX[active.platformStyle];
-    wo.hazStyle = HAZ_IDX[active.hazardStyle];
-    wo.hazColor.set(this.lut.hazardColor);
-    wo.wobbleAmp = lerp(cur.wobble.amp, nxt.wobble.amp, mix);
-    wo.wobbleFreq = lerp(cur.wobble.freq, nxt.wobble.freq, mix);
-    wo.spiralFlow = lerp(cur.spiralFlow, nxt.spiralFlow, mix);
-    p.wedge.updateWorld(this.field, centerK, this.mapDepth, wo);
-    p.wedge.render(r);
 
     // mirror strobe rule-breaker: flick between the two folds on the beat
-    let mirrorMix = mix;
+    let foldMix = mix;
     if (pm.ruleBreaker?.type === 'mirrorStrobe') {
-      mirrorMix = this.strobeFlip ? 1 : 0;
+      foldMix = this.strobeFlip ? 1 : 0;
     }
-    p.mirror.setSources(p.wedge.rt, p.bg.rt); // bg ping-pongs each frame
-    p.mirror.render(
-      r,
-      p.sceneRT,
-      TWO_PI / cur.mirrorN,
-      TWO_PI / nxt.mirrorN,
-      cur.mirrorTwist,
-      nxt.mirrorTwist,
-      mirrorMix,
-      this.viewRot,
-      this.worldAlpha
-    );
 
-    // player pass: climber + trail + particles, unmirrored, on top
-    const showShard = (this.fsm.playing && this.runner.alive) && !this.paused;
-    const sp = this.shardClipPos();
-    const pose = this.climberPose;
-    pose.x = sp[0];
-    pose.y = sp[1];
-    pose.posAngle = this.runner.theta + this.viewRot;
-    pose.grabT = -1;
-    pose.state = this.dashVisT > 0 ? 'dash' : this.runner.jumpT > 0 ? 'rise' : 'run';
-    pose.omega = this.runner.tangentOmega;
-    this.shardVisual.update(dtRaw, pose, this.time, showShard);
+    p.cave.render(r, p.sceneRT, {
+      camX: this.cam.x,
+      camY: this.cam.y,
+      camZ: this.cam.z,
+      time: this.time,
+      beat: this.beatPulse,
+      wedgeA: TWO_PI / cur.mirrorN,
+      wedgeB: TWO_PI / nxt.mirrorN,
+      foldMix,
+      texMix: mix,
+      twist: lerp(cur.mirrorTwist, nxt.mirrorTwist, mix) * 4,
+      dim: this.worldAlpha,
+      noiseScale: lerp(cur.noiseScale, nxt.noiseScale, mix),
+      wobAmp: lerp(cur.wobble.amp, nxt.wobble.amp, mix),
+      wobFreq: lerp(cur.wobble.freq, nxt.wobble.freq, mix),
+      spiralFlow: lerp(cur.spiralFlow, nxt.spiralFlow, mix),
+    });
+
+    // obstacles + coins + the runner + particles, projected on top
+    this.worldLayer.update(this.track, this.cam, this.square, this.lut, this.time, this.beatPulse);
+    this.worldLayer.gfx.alpha = this.worldAlpha;
+
+    const showRunner = (this.fsm.playing && this.runner.alive) && !this.paused;
+    if (this.lut.revision !== this.hudColorRev) {
+      this.lut.colorFloatAt(0.8, this.runnerVisual.glowColor);
+    }
+    if (project(this.cam, this.square, this.runner.x, 0, this.runner.z, this.proj)) {
+      const pose = this.runnerPose();
+      this.runnerVisual.update(
+        dtRaw,
+        {
+          px: this.proj.px,
+          py: this.proj.py,
+          k: this.proj.k,
+          y: this.runner.y,
+          lean: this.runner.lean,
+          pose,
+          stride: (this.runner.z * 0.55) % 1,
+          rollP: 1 - this.runner.rollT / TUNING.ROLL_S,
+          jumpP: 1 - this.runner.jumpT / TUNING.JUMP_S,
+        },
+        this.time,
+        showRunner
+      );
+    }
     this.particles.update(dt);
     r.render({ container: p.playerLayer, target: p.sceneRT, clear: false });
 
@@ -761,15 +667,14 @@ class Game {
     if (this.hud.root.visible) {
       if (this.lut.revision !== this.hudColorRev || this.inkAmt > 0.01) {
         this.hudColorRev = this.lut.revision;
-        this.lut.colorFloatAt(0.8, this.shardVisual.glowColor);
         if (this.inkAmt > 0.5) {
           // HUD draws after the post chain: apply the same paper-minus-color
           // transform on the CPU so runes read as ink on paper
           this.lut.colorFloatAt(0.78, this.vigColor); // scratch reuse
-          const r = Math.round(Math.max(0, 0.965 - this.vigColor[0] * 0.88) * 255);
-          const g = Math.round(Math.max(0, 0.945 - this.vigColor[1] * 0.88) * 255);
-          const b = Math.round(Math.max(0, 0.9 - this.vigColor[2] * 0.88) * 255);
-          this.hud.setColor(`rgb(${r},${g},${b})`);
+          const rr = Math.round(Math.max(0, 0.965 - this.vigColor[0] * 0.88) * 255);
+          const gg = Math.round(Math.max(0, 0.945 - this.vigColor[1] * 0.88) * 255);
+          const bb = Math.round(Math.max(0, 0.9 - this.vigColor[2] * 0.88) * 255);
+          this.hud.setColor(`rgb(${rr},${gg},${bb})`);
         } else {
           this.hud.setColor(this.lut.colorAt(0.78));
         }

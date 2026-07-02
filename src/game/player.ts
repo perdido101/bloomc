@@ -1,37 +1,42 @@
 import { TUNING } from './difficulty';
-import { RingField, SAMPLE_HAZARD, SAMPLE_NONE } from './rings';
+import { TrackField, type Obstacle } from './track';
 
 /* ------------------------------------------------------------------ */
-/*  Input — endless-runner gestures, one thumb:                         */
-/*    drag left/right   = steer (rotate the tunnel, 1:1 under finger)   */
-/*    quick flick ⇄     = lane hop (eased impulse)                      */
-/*    tap               = jump (passes over LOW rings)                  */
-/*    swipe up          = dash (burst + smash through one wall)         */
-/*    swipe down        = brake (brief slow to line up a door)          */
-/*  Desktop: hold ←/→ or A/D steer · Space jump · Shift dash · S brake. */
+/*  Input — classic runner gestures, one thumb:                         */
+/*    swipe ⇄       = change lane                                       */
+/*    swipe ↑ / tap = jump (over LOW lasers)                            */
+/*    swipe ↓       = roll (under HIGH lasers); mid-air = fast fall     */
+/*  Desktop: ←/→ or A/D lanes · Space/↑ jump · ↓/S roll · Esc pause.    */
+/*  Swipes fire the moment the finger crosses the threshold — no        */
+/*  waiting for release.                                                */
 /* ------------------------------------------------------------------ */
 
-export class Input {
-  /** -1..1 keyboard steering */
-  steerAxis = 0;
+/** what the Runner consumes — tests provide doubles of this */
+export interface RunnerInput {
+  consumeLane(): number;
+  consumeJump(): boolean;
+  consumeRoll(): boolean;
+}
+
+interface Touch {
+  x: number;
+  y: number;
+  t: number;
+  moved: number;
+  swiped: boolean;
+}
+
+export class Input implements RunnerInput {
   onPause: (() => void) | null = null;
   onAnyInput: (() => void) | null = null;
 
-  private left = false;
-  private right = false;
-  private jumpAt = -Infinity;
-  private dashAt = -Infinity;
-  private brakeAt = -Infinity;
-  private dragPx = 0;      // accumulated horizontal drag since last consume
-  private hopQueued = 0;   // -1 | 0 | +1
-  private touches = new Map<
-    number,
-    { x: number; y: number; lx: number; t: number; moved: number }
-  >();
+  private laneQueued = 0; // accumulated ±1 steps
+  private jumpQueued = false;
+  private rollQueued = false;
+  private touches = new Map<number, Touch>();
 
   constructor(el: HTMLElement) {
     window.addEventListener('keydown', this.onKeyDown);
-    window.addEventListener('keyup', this.onKeyUp);
     el.addEventListener('pointerdown', this.onPointerDown);
     el.addEventListener('pointermove', this.onPointerMove);
     el.addEventListener('pointerup', this.onPointerUp);
@@ -45,45 +50,26 @@ export class Input {
     switch (e.code) {
       case 'ArrowLeft':
       case 'KeyA':
-        this.left = true;
+        this.laneQueued -= 1;
         break;
       case 'ArrowRight':
       case 'KeyD':
-        this.right = true;
+        this.laneQueued += 1;
         break;
       case 'Space':
       case 'ArrowUp':
       case 'KeyW':
-        this.jumpAt = performance.now();
+        this.jumpQueued = true;
         e.preventDefault();
-        break;
-      case 'ShiftLeft':
-      case 'ShiftRight':
-        this.dashAt = performance.now();
         break;
       case 'ArrowDown':
       case 'KeyS':
-        this.brakeAt = performance.now();
+        this.rollQueued = true;
         break;
       case 'Escape':
         this.onPause?.();
         break;
     }
-    this.steerAxis = (this.right ? 1 : 0) - (this.left ? 1 : 0);
-  };
-
-  private onKeyUp = (e: KeyboardEvent): void => {
-    switch (e.code) {
-      case 'ArrowLeft':
-      case 'KeyA':
-        this.left = false;
-        break;
-      case 'ArrowRight':
-      case 'KeyD':
-        this.right = false;
-        break;
-    }
-    this.steerAxis = (this.right ? 1 : 0) - (this.left ? 1 : 0);
   };
 
   private onPointerDown = (e: PointerEvent): void => {
@@ -91,42 +77,37 @@ export class Input {
     this.touches.set(e.pointerId, {
       x: e.clientX,
       y: e.clientY,
-      lx: e.clientX,
       t: performance.now(),
       moved: 0,
+      swiped: false,
     });
   };
 
   private onPointerMove = (e: PointerEvent): void => {
     const t = this.touches.get(e.pointerId);
-    if (!t) return;
-    const dx = e.clientX - t.lx;
-    t.lx = e.clientX;
-    t.moved = Math.max(t.moved, Math.hypot(e.clientX - t.x, e.clientY - t.y));
-    this.dragPx += dx;
+    if (!t || t.swiped) return;
+    const dx = e.clientX - t.x;
+    const dy = e.clientY - t.y;
+    t.moved = Math.max(t.moved, Math.hypot(dx, dy));
+    if (performance.now() - t.t > TUNING.SWIPE_MAX_MS) return;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < TUNING.SWIPE_MIN_PX) return;
+    t.swiped = true; // fire immediately at the threshold — feels instant
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      this.laneQueued += dx > 0 ? 1 : -1;
+    } else if (dy < 0) {
+      this.jumpQueued = true;
+    } else {
+      this.rollQueued = true;
+    }
   };
 
   private onPointerUp = (e: PointerEvent): void => {
     const t = this.touches.get(e.pointerId);
     this.touches.delete(e.pointerId);
-    if (!t) return;
-    const dx = e.clientX - t.x;
-    const dy = e.clientY - t.y;
+    if (!t || t.swiped) return;
     const dt = performance.now() - t.t;
-    const now = performance.now();
-
     if (t.moved <= TUNING.TAP_SLOP_PX && dt <= TUNING.TAP_MAX_MS) {
-      this.jumpAt = now; // tap = jump
-      return;
-    }
-    if (Math.abs(dy) > Math.abs(dx) * 1.4 && Math.abs(dy) >= TUNING.SWIPE_V_MIN_PX) {
-      if (dy < 0) this.dashAt = now;
-      else this.brakeAt = now;
-      return;
-    }
-    // fast horizontal flick = lane hop (in addition to the drag already applied)
-    if (Math.abs(dx) >= TUNING.FLICK_MIN_PX && dt <= TUNING.FLICK_MAX_MS) {
-      this.hopQueued = dx > 0 ? 1 : -1;
+      this.jumpQueued = true; // tap = jump
     }
   };
 
@@ -134,201 +115,213 @@ export class Input {
     this.touches.delete(e.pointerId);
   };
 
-  /** accumulated finger drag since last frame, in px (consumed) */
-  consumeDragPx(): number {
-    const d = this.dragPx;
-    this.dragPx = 0;
+  consumeLane(): number {
+    const d = this.laneQueued;
+    this.laneQueued = 0;
     return d;
   }
 
-  consumeHop(): number {
-    const h = this.hopQueued;
-    this.hopQueued = 0;
-    return h;
+  consumeJump(): boolean {
+    const j = this.jumpQueued;
+    this.jumpQueued = false;
+    return j;
   }
 
-  jumpBuffered(): boolean {
-    return performance.now() - this.jumpAt <= TUNING.JUMP_BUFFER_MS;
-  }
-
-  consumeJump(): void {
-    this.jumpAt = -Infinity;
-  }
-
-  dashQueued(): boolean {
-    return performance.now() - this.dashAt <= 150;
-  }
-
-  consumeDash(): void {
-    this.dashAt = -Infinity;
-  }
-
-  brakeQueued(): boolean {
-    return performance.now() - this.brakeAt <= 150;
-  }
-
-  consumeBrake(): void {
-    this.brakeAt = -Infinity;
+  consumeRoll(): boolean {
+    const r = this.rollQueued;
+    this.rollQueued = false;
+    return r;
   }
 
   clear(): void {
-    this.jumpAt = this.dashAt = this.brakeAt = -Infinity;
-    this.dragPx = 0;
-    this.hopQueued = 0;
+    this.laneQueued = 0;
+    this.jumpQueued = false;
+    this.rollQueued = false;
     this.touches.clear();
   }
 }
 
 /* ------------------------------------------------------------------ */
-/*  The Runner: you fly forward; rings rush at you; thread the doors.   */
+/*  The Runner: auto-run down the cave; dodge, jump, roll.              */
 /* ------------------------------------------------------------------ */
 
-export type CrashCause = 'wall' | 'hazard';
+export type CrashCause = 'gate' | 'laser';
 
 export interface RunnerEvents {
-  /** passed ring k; viaDoor=false means jumped over or dashed through */
-  onPass?: (k: number, viaDoor: boolean, graze: boolean) => void;
+  onLane?: (dir: number) => void;
   onJump?: () => void;
-  onDash?: () => void;
-  onBrake?: () => void;
-  onMote?: (count: number) => void;
+  onRoll?: () => void;
+  /** cleanly passed an obstacle event plane */
+  onPass?: (closeCall: boolean) => void;
+  onCoin?: (count: number) => void;
   onDie?: (cause: CrashCause) => void;
 }
 
+function easeOutCubic(t: number): number {
+  const u = 1 - t;
+  return 1 - u * u * u;
+}
+
 export class Runner {
-  /** forward flight depth, world units */
+  /** forward distance, world units */
   z = 0;
-  theta = 0;
-  steerVel = 0;
-  /** airborne window remaining (passes over LOW rings) */
-  jumpT = 0;
-  dashT = 0;
-  dashCd = 0;
-  brakeT = 0;
-  brakeCd = 0;
+  /** lateral position, world units */
+  x = 0;
+  /** height above the floor */
+  y = 0;
+  /** target lane −1 | 0 | +1 */
+  lane = 0;
   alive = true;
-  /** last ring plane passed */
-  ringK = 0;
-  /** current forward speed (for the animator/trail) */
+  /** current forward speed (world units/s) */
   speed = 0;
-  /** total steering rate this frame (for the animator) */
-  tangentOmega = 0;
+  /** jump time remaining */
+  jumpT = 0;
+  /** roll time remaining */
+  rollT = 0;
+  /** lateral velocity estimate, for the animator's lean */
+  lean = 0;
+
+  private baseSpeed: number = TUNING.RUN_SPEED0;
+  private tweenFrom = 0;
+  private tweenT = 1; // 1 = settled
+  private jumpBuffered = false;
+  private lastEventZ = -Infinity;
 
   reset(): void {
-    this.z = -TUNING.RING_SPACING * 0.5; // half a spacing of runway
-    this.theta = Math.random() * Math.PI * 2;
-    this.steerVel = 0;
-    this.jumpT = 0;
-    this.dashT = 0;
-    this.dashCd = 0;
-    this.brakeT = 0;
-    this.brakeCd = 0;
+    this.z = 0;
+    this.x = 0;
+    this.y = 0;
+    this.lane = 0;
     this.alive = true;
-    this.ringK = 0;
     this.speed = 0;
+    this.jumpT = 0;
+    this.rollT = 0;
+    this.lean = 0;
+    this.baseSpeed = TUNING.RUN_SPEED0;
+    this.tweenFrom = 0;
+    this.tweenT = 1;
+    this.jumpBuffered = false;
+    this.lastEventZ = -Infinity;
   }
 
+  get airborne(): boolean {
+    return this.jumpT > 0;
+  }
+
+  get rolling(): boolean {
+    return this.rollT > 0;
+  }
+
+  /**
+   * @param speedMul pace multiplier from the PhaseManager (Blooms) and
+   *                 the takeoff ramp; 1 = base pace.
+   */
   update(
     dt: number,
-    input: Input,
-    field: RingField,
-    wedge: number,
-    forwardSpeed: number,
-    ev: RunnerEvents,
-    twist = 0
+    input: RunnerInput,
+    track: TrackField,
+    speedMul: number,
+    ev: RunnerEvents
   ): void {
     if (!this.alive || dt <= 0) return;
-    const S = TUNING.RING_SPACING;
-    this.jumpT = Math.max(0, this.jumpT - dt);
-    this.dashT = Math.max(0, this.dashT - dt);
-    this.dashCd = Math.max(0, this.dashCd - dt);
-    this.brakeT = Math.max(0, this.brakeT - dt);
-    this.brakeCd = Math.max(0, this.brakeCd - dt);
 
-    // --- steering: drag is 1:1 under the finger; flicks add momentum ---
-    const drag = input.consumeDragPx() * TUNING.DRAG_RAD_PER_PX;
-    const hop = input.consumeHop();
-    if (hop !== 0) this.steerVel += hop * TUNING.HOP_IMPULSE;
-    this.steerVel += input.steerAxis * TUNING.STEER_KEY_SPEED * dt * 10;
-    const maxSteer = TUNING.STEER_KEY_SPEED * 1.6;
-    if (this.steerVel > maxSteer) this.steerVel = maxSteer;
-    if (this.steerVel < -maxSteer) this.steerVel = -maxSteer;
-    this.theta += drag + this.steerVel * dt;
-    this.steerVel *= Math.exp(-TUNING.STEER_DAMP * dt);
-    this.tangentOmega = this.steerVel + (dt > 0 ? drag / dt : 0);
+    // --- forward pace: slow, fair ramp toward RUN_SPEED_MAX ---
+    this.baseSpeed = Math.min(TUNING.RUN_SPEED_MAX, this.baseSpeed + TUNING.RUN_ACCEL * dt);
+    this.speed = this.baseSpeed * speedMul;
+    const prevZ = this.z;
+    this.z += this.speed * dt;
 
-    // --- moves ---
-    if (input.jumpBuffered()) {
-      input.consumeJump();
-      this.jumpT = TUNING.JUMP_WINDOW_S;
-      ev.onJump?.();
-    }
-    if (input.dashQueued() && this.dashCd <= 0) {
-      input.consumeDash();
-      this.dashT = TUNING.DASH_DUR_S;
-      this.dashCd = TUNING.DASH_CD_S;
-      ev.onDash?.();
-    }
-    if (input.brakeQueued() && this.brakeCd <= 0) {
-      input.consumeBrake();
-      this.brakeT = TUNING.BRAKE_DUR_S;
-      this.brakeCd = TUNING.BRAKE_CD_S;
-      ev.onBrake?.();
-    }
-
-    // --- forward flight ---
-    let v = forwardSpeed;
-    if (this.dashT > 0) v *= TUNING.DASH_SPEED_MUL;
-    if (this.brakeT > 0) v *= TUNING.BRAKE_SPEED_MUL;
-    this.speed = v;
-    const prev = this.z;
-    this.z += v * dt;
-
-    // --- aim assist: near a crossing, ease toward a close-by door ---
-    const nextPlane = (Math.floor(prev / S) + 1) * S;
-    if (nextPlane - this.z < v * 0.3 && field.rings.has(Math.round(nextPlane / S))) {
-      const k = Math.round(nextPlane / S);
-      const da = field.doorDelta(k, this.theta, wedge, twist);
-      if (da !== null && Math.abs(da) <= TUNING.ASSIST_RANGE && da !== 0) {
-        const pull = Math.sign(da) * Math.min(Math.abs(da), TUNING.ASSIST_RATE * dt);
-        this.theta += pull;
+    // --- lane changes ---
+    const steps = input.consumeLane();
+    if (steps !== 0) {
+      const target = Math.max(-1, Math.min(1, this.lane + steps));
+      if (target !== this.lane) {
+        this.tweenFrom = this.x;
+        this.lane = target;
+        this.tweenT = 0;
+        ev.onLane?.(Math.sign(steps));
       }
     }
+    const prevX = this.x;
+    if (this.tweenT < 1) {
+      this.tweenT = Math.min(1, this.tweenT + dt / TUNING.LANE_TWEEN_S);
+      this.x =
+        this.tweenFrom +
+        (this.lane * TUNING.LANE_X - this.tweenFrom) * easeOutCubic(this.tweenT);
+    } else {
+      this.x = this.lane * TUNING.LANE_X;
+    }
+    this.lean = this.lean * Math.exp(-10 * dt) + (this.x - prevX) * 6;
 
-    // --- ring crossings ---
-    const loK = Math.floor(prev / S) + 1;
-    const hiK = Math.floor(this.z / S);
-    for (let k = Math.max(1, loK); k <= hiK; k++) {
-      const ring = field.rings.get(k);
-      if (!ring) {
-        this.ringK = k;
-        continue;
+    // --- jump / roll ---
+    if (input.consumeJump()) {
+      if (this.jumpT <= 0) {
+        this.jumpT = TUNING.JUMP_S;
+        this.rollT = 0;
+        ev.onJump?.();
+      } else if (this.jumpT < TUNING.JUMP_S * 0.35) {
+        this.jumpBuffered = true; // landing soon: buffer the next hop
       }
-      const s = field.sample(k, this.theta, wedge, twist);
-      if (s === SAMPLE_NONE) {
-        // clean pass through a doorway; grazing the edge is style
-        const edge = field.doorEdgeDist(k, this.theta, wedge, twist);
-        const graze = edge !== null && edge <= TUNING.GRAZE_RAD;
-        ev.onPass?.(k, true, graze);
-      } else if (ring.low && this.jumpT > 0) {
-        ev.onPass?.(k, false, false); // leapt over a low wall
-      } else if (this.dashT > 0) {
-        this.dashT = 0; // dash smashes through exactly one obstacle
-        ev.onPass?.(k, false, false);
-      } else if (s === SAMPLE_HAZARD) {
-        this.alive = false;
-        ev.onDie?.('hazard');
-        return;
+    }
+    if (input.consumeRoll()) {
+      if (this.jumpT > 0) {
+        // mid-air swipe down = fast fall
+        this.jumpT = Math.min(this.jumpT, TUNING.JUMP_S * 0.12);
       } else {
-        this.alive = false;
-        ev.onDie?.('wall');
-        return;
+        this.rollT = TUNING.ROLL_S;
+        ev.onRoll?.();
       }
-      this.ringK = k;
+    }
+    if (this.jumpT > 0) {
+      this.jumpT = Math.max(0, this.jumpT - dt);
+      if (this.jumpT === 0 && this.jumpBuffered) {
+        this.jumpBuffered = false;
+        this.jumpT = TUNING.JUMP_S;
+        ev.onJump?.();
+      }
+    }
+    if (this.rollT > 0) this.rollT = Math.max(0, this.rollT - dt);
+    const p = this.jumpT > 0 ? 1 - this.jumpT / TUNING.JUMP_S : -1;
+    this.y = p >= 0 ? TUNING.JUMP_H * Math.sin(Math.PI * p) : 0;
+
+    // --- obstacle crossings this frame ---
+    const hits = track.crossings(prevZ, this.z);
+    if (hits.length > 0) {
+      let closeCall = false;
+      let passedPlane = false;
+      for (const o of hits) {
+        const d = Math.abs(this.x - o.lane * TUNING.LANE_X);
+        if (d < TUNING.COLLIDE_HALF_X) {
+          if (!this.clears(o)) {
+            this.alive = false;
+            ev.onDie?.(o.kind === 'gate' ? 'gate' : 'laser');
+            return;
+          }
+        } else if (d < TUNING.LANE_X * 1.05) {
+          closeCall = true; // skimmed right past a blocked lane
+        }
+        if (o.z !== this.lastEventZ) {
+          this.lastEventZ = o.z;
+          passedPlane = true;
+        }
+      }
+      if (passedPlane) ev.onPass?.(closeCall);
     }
 
-    // --- motes ---
-    const collected = field.collectMotes(this.z, this.theta, wedge, twist);
-    if (collected > 0) ev.onMote?.(collected);
+    // --- coins ---
+    const got = track.collectCoins(prevZ, this.z, this.x);
+    if (got > 0) ev.onCoin?.(got);
+  }
+
+  /** does the current pose clear obstacle o in-lane? */
+  private clears(o: Obstacle): boolean {
+    switch (o.kind) {
+      case 'low':
+        return this.y > TUNING.LOW_BAR_Y;
+      case 'high':
+        return this.rollT > 0 && this.y <= 0.01;
+      case 'gate':
+        return false;
+    }
   }
 }

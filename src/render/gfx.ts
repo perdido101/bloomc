@@ -4,9 +4,7 @@ import { Geometry, Mesh, Shader } from 'pixi.js';
  * Shared helpers for the custom render pipeline. All world passes are
  * fullscreen-triangle meshes with clip-space vertex shaders; pixi's scene
  * transforms are bypassed entirely (we render meshes directly per pass).
- *
- * Conventions: clip space +y = up. World angle θ is standard math CCW.
- * A point at (sN, θ) maps to clip (sN·cosθ, sN·sinθ) in the square target.
+ * Conventions: clip space +y = up.
  */
 
 /**
@@ -26,7 +24,7 @@ void main() {
 }
 `;
 
-/** GLSL kaleidoscope fold — must match foldAngle() in rings.ts */
+/** GLSL kaleidoscope fold: reflect x into [0, w] with period 2w */
 export const GLSL_FOLD = /* glsl */ `
 float fold(float x, float w) {
   float p = 2.0 * w;
