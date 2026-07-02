@@ -436,6 +436,21 @@ class Game {
     this.fsm.set(GameState.GAMEOVER);
   }
 
+  private readonly ringScratch: Array<{ z: number; mask: number }> = [];
+
+  /** the ≤4 nearest pattern-rings ahead, packed for the cave shader */
+  private nearRings(): Array<{ z: number; mask: number }> {
+    this.ringScratch.length = 0;
+    for (const e of this.track.events) {
+      if (e.z - this.cam.z <= 0.45) continue;
+      let mask = 0;
+      for (let c = 0; c < 6; c++) if (e.open[c]) mask |= 1 << c;
+      this.ringScratch.push({ z: e.z, mask });
+      if (this.ringScratch.length === 4) break;
+    }
+    return this.ringScratch;
+  }
+
   private readonly clipPos = new Float32Array(2);
 
   /** runner position in square clip space (reuses a scratch array) */
@@ -606,12 +621,11 @@ class Game {
       detail: lerp(cur.flowFeedback, nxt.flowFeedback, mix) / 0.35
         + (active.nestedKaleido ? 0.5 : 0),
       petalSharp: 1.5 + lerp(cur.noiseScale, nxt.noiseScale, mix) * 0.8,
+      rings: this.nearRings(),
     });
 
-    // obstacles + coins + the runner + particles, projected on top
-    this.worldLayer.update(
-      this.track, this.cam, this.square, this.lut, this.time, this.beatPulse, active.mirrorN
-    );
+    // coins + the cat + particles, projected on top
+    this.worldLayer.update(this.track, this.cam, this.square, this.lut, this.time);
     this.worldLayer.gfx.alpha = this.worldAlpha;
 
     const showRunner = (this.fsm.playing && this.runner.alive) && !this.paused;
@@ -627,6 +641,8 @@ class Game {
           k: this.proj.k,
           lean: this.runner.lean,
           vy: this.runner.vy,
+          runPhase: (this.runner.z * 0.45) % 1,
+          speedN: this.runner.speed / TUNING.RUN_SPEED_MAX,
         },
         this.time,
         showRunner

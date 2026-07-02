@@ -31,6 +31,9 @@ uniform vec4 uFold;   // wedgeA, wedgeB, foldMix, texMix
 uniform vec4 uMotion; // time, beat, spin, dim
 uniform vec4 uLook;   // noiseScale, wobAmp, wobFreq, spiralRate
 uniform vec4 uVar;    // warpStrength, texDrift, detail, petalSharp
+// the approaching pattern-rings: (z, gapMask, 0, 0); z < 0 = unused.
+// gapMask bit c = cell c is an open gap (cell = lane+1 + tier*3)
+uniform vec4 uRings[4];
 
 ${GLSL_FOLD}
 
@@ -118,6 +121,62 @@ void main() {
   float port = exp(-rad * rad * 7.0);
   col += lut(0.94) * port * port * (0.5 + 0.25 * uMotion.y);
 
+  // ---- the RINGS: the same kaleidoscope condensing in your way ----
+  // Each ring is a plane of the environment's own folded pattern that
+  // takes shape as it approaches; the GAPS in it are the way through.
+  const float LANE = ${TUNING.LANE_X.toFixed(3)};
+  const float TY0 = ${TUNING.TIER_Y0.toFixed(3)};
+  const float TY1 = ${TUNING.TIER_Y1.toFixed(3)};
+  const float HRX = ${(TUNING.GAP_HALF_X - 0.04).toFixed(3)};
+  const float HRY = ${(TUNING.GAP_HALF_Y - 0.05).toFixed(3)};
+  for (int i = 3; i >= 0; i--) {
+    float rz = uRings[i].x;
+    if (rz < 0.0) continue;
+    float rdz = rz - uCam.z;
+    if (rdz <= 0.45 || rdz >= dz) continue; // behind us, or past the wall
+    vec2 hp = vec2(uCam.x + rd.x * rdz / F, uCam.y + rd.y * rdz / F);
+    float rr = length(hp - vec2(0.0, yc));
+    if (rr >= R) continue;
+
+    // the ring wears the SAME fold as the walls at this depth —
+    // one continuous kaleidoscope
+    float rth = atan(hp.y - yc, hp.x);
+    float raa = rth + uMotion.z + rz * uLook.w;
+    float rfw = mix(fold(raa, uFold.x) / uFold.x, fold(raa, uFold.y) / uFold.y, uFold.z);
+    float rlum;
+    // radial flow coordinate meets the wall pattern exactly at the rim
+    vec3 rcol = kaleid(rfw, rz * (0.06 + uLook.x * 0.015) + (R - rr) * 0.2, rlum);
+
+    // gaps: openings punched through the pattern
+    int mask = int(uRings[i].y + 0.5);
+    float hole = 1e9;
+    for (int c = 0; c < 6; c++) {
+      if (((mask >> c) & 1) == 0) continue;
+      float cx2 = (mod(float(c), 3.0) - 1.0) * LANE;
+      float cy2 = c < 3 ? TY0 : TY1;
+      vec2 q = vec2((hp.x - cx2) / HRX, (hp.y - cy2) / HRY);
+      hole = min(hole, dot(q, q));
+    }
+
+    // condensation: far away only the bright veins have formed; up close
+    // the pattern is solid. This IS the environment taking shape.
+    float grow = smoothstep(${TUNING.HORIZON_Z.toFixed(1)}, 24.0, rdz);
+    float thr = 0.62 - 0.6 * grow;
+    float alpha = grow * (0.25 + 0.75 * smoothstep(thr, thr + 0.22, rlum));
+    // the gap stays open — soft-edged
+    alpha *= smoothstep(0.72, 1.05, hole);
+    // rim of the disc melts into the tunnel wall
+    alpha *= smoothstep(1.0, 0.92, rr / R);
+
+    // gap edges glow — the invitation through
+    float eg = exp(-abs(hole - 1.0) * 5.0) * grow;
+    rcol += lut(0.9) * eg * (0.5 + 0.4 * uMotion.y);
+    // and light pools inside the opening
+    rcol += lut(0.95) * exp(-hole * 1.4) * 0.3 * grow;
+
+    col = mix(col, rcol * (0.9 + 0.35 * grow), clamp(alpha, 0.0, 1.0));
+  }
+
   col *= uMotion.w;
   finalColor = vec4(col, 1.0);
 }
@@ -148,6 +207,8 @@ export interface CaveOpts {
   texDrift: number;
   detail: number;
   petalSharp: number;
+  /** up to 4 nearest pattern-rings: world z + open-gap bitmask */
+  rings: Array<{ z: number; mask: number }>;
 }
 
 export class CavePass {
@@ -167,6 +228,7 @@ export class CavePass {
           uMotion: { value: new Float32Array([0, 0, 0, 1]), type: 'vec4<f32>' },
           uLook: { value: new Float32Array([3, 0, 1, 0.08]), type: 'vec4<f32>' },
           uVar: { value: new Float32Array([0.5, 1, 0.5, 3]), type: 'vec4<f32>' },
+          uRings: { value: new Float32Array(16).fill(-1), type: 'vec4<f32>', size: 4 },
         },
         uTexA: texA.source,
         uTexB: texA.source,
@@ -207,6 +269,12 @@ export class CavePass {
     va[1] = o.texDrift;
     va[2] = o.detail;
     va[3] = o.petalSharp;
+    const rings = u.uRings as Float32Array;
+    for (let i = 0; i < 4; i++) {
+      const ring = o.rings[i];
+      rings[i * 4] = ring ? ring.z : -1;
+      rings[i * 4 + 1] = ring ? ring.mask : 0;
+    }
     renderer.render({ container: this.mesh, target, clear: true });
   }
 }
