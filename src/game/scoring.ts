@@ -65,6 +65,11 @@ export class Scoring {
     return pts;
   }
 
+  /** flat bonus (tier-up events) */
+  addBonus(pts: number): void {
+    this.score += pts;
+  }
+
   onBloomSurvived(bloomsDone: number): number {
     this.blooms = bloomsDone;
     const pts = TUNING.BLOOM_BONUS * bloomsDone;

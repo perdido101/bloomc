@@ -1,5 +1,12 @@
 import { TUNING } from './difficulty';
-import type { PhaseDef } from './phases';
+
+/** gameplay knobs handed down from the active PhaseDNA */
+export interface WorldGen {
+  gapScale: number;
+  hazardDensity: number;
+  tier: number;
+  layoutStyle: 'even-gaps' | 'cluster' | 'staircase-drift';
+}
 
 /** FNV-1a hash of a string → uint32, for seeding runs from a seed string. */
 export function hashSeed(str: string): number {
@@ -39,6 +46,21 @@ export function foldAngle(x: number, w: number): number {
   let t = x % p;
   if (t < 0) t += p;
   return t > w ? p - t : t;
+}
+
+const TWO_PI = Math.PI * 2;
+
+/**
+ * Mirror fold with per-copy angular twist (spiral galaxies). Copy m of the
+ * kaleidoscope is rotated by twist·m before folding. Must match the GLSL
+ * twistFold in the mirror shader — collision and visuals share this math.
+ */
+export function twistFold(x: number, w: number, twist: number): number {
+  if (twist === 0) return foldAngle(x, w);
+  let thn = x % TWO_PI;
+  if (thn < 0) thn += TWO_PI;
+  const m = Math.floor(thn / w);
+  return foldAngle(thn - twist * m, w);
 }
 
 /** Arc authored in the master wedge, in wedge-fraction units [0, 1]. */
@@ -95,7 +117,7 @@ export class RingField {
     this.seed = seed;
   }
 
-  ensureWindow(center: number, phase: PhaseDef, intensity: number): void {
+  ensureWindow(center: number, gen: WorldGen, intensity: number): void {
     this.centerDepth = center;
     const lo = center - TUNING.RING_WINDOW;
     const hi = center + TUNING.RING_WINDOW;
@@ -104,7 +126,7 @@ export class RingField {
     }
     for (let k = lo; k <= hi; k++) {
       if (k >= 0 && !this.rings.has(k)) {
-        this.rings.set(k, this.generate(k, phase, intensity));
+        this.rings.set(k, this.generate(k, gen, intensity));
       }
     }
   }
@@ -113,7 +135,7 @@ export class RingField {
     return this.centerDepth - TUNING.RING_WINDOW;
   }
 
-  private generate(k: number, phase: PhaseDef, intensity: number): Ring {
+  private generate(k: number, gen: WorldGen, intensity: number): Ring {
     const rng = new XorShift((this.seed ^ Math.imul(k + 0x7f4a7c15, 2654435761)) >>> 0);
     const sign = (k % 2 === 0 ? 1 : -1);
     const mag = Math.min(
@@ -123,39 +145,63 @@ export class RingField {
     const omega = sign * mag;
     const phi = rng.next() * Math.PI * 2;
 
-    // --- platforms: 1..3 arcs filling `coverage` of the wedge ---
+    // --- platforms: arcs filling `coverage` of the wedge ---
     const rawCov = TUNING.PLATFORM_COVERAGE_START - TUNING.COVERAGE_DECAY_PER_DEPTH * k;
-    let coverage = Math.max(TUNING.PLATFORM_COVERAGE_MIN, rawCov) + phase.coverageAdd;
-    coverage = Math.min(0.92, Math.max(0.3, coverage / Math.sqrt(intensity)));
+    let coverage = Math.max(TUNING.PLATFORM_COVERAGE_MIN, rawCov);
+    coverage = Math.min(0.92, Math.max(0.3, coverage / (gen.gapScale * Math.pow(intensity, 0.35))));
     // the starting ring is a safe haven
     if (k === 0) coverage = 0.98;
 
     const maxArcs = Math.min(3, 1 + Math.floor(k / 8));
     const nArcs = k === 0 ? 1 : 1 + Math.floor(rng.next() * maxArcs);
     const arcs: Arc[] = [];
-    // random positive weights for platform pieces and gaps, alternating
-    const pw: number[] = [];
-    const gw: number[] = [];
-    for (let i = 0; i < nArcs; i++) {
-      pw.push(0.35 + rng.next());
-      gw.push(0.35 + rng.next());
-    }
-    const pSum = pw.reduce((a, b) => a + b, 0);
-    const gSum = gw.reduce((a, b) => a + b, 0);
-    let cursor = rng.next(); // random offset; fold wraps it seamlessly
-    for (let i = 0; i < nArcs; i++) {
-      const w = (pw[i] / pSum) * coverage;
-      arcs.push({ s: cursor, e: cursor + w, hazard: false });
-      cursor += w + (gw[i] / gSum) * (1 - coverage);
+    // three seeded layout generators so ring RHYTHM evolves with tier
+    if (gen.layoutStyle === 'cluster' && k > 0) {
+      // arcs bunched together with slivers of gap, then one big void
+      let cursor = rng.next();
+      const sliver = 0.02 + rng.next() * 0.03;
+      const wSum = coverage - sliver * (nArcs - 1);
+      for (let i = 0; i < nArcs; i++) {
+        const w = wSum / nArcs;
+        arcs.push({ s: cursor, e: cursor + w, hazard: false });
+        cursor += w + sliver;
+      }
+    } else if (gen.layoutStyle === 'staircase-drift' && k > 0) {
+      // even arcs whose anchor drifts a fixed step per ring — a spiral stair
+      const cursor0 = (k * 0.1459) % 1;
+      const w = coverage / nArcs;
+      const gap = (1 - coverage) / nArcs;
+      for (let i = 0; i < nArcs; i++) {
+        const s0 = cursor0 + i * (w + gap);
+        arcs.push({ s: s0, e: s0 + w, hazard: false });
+      }
+    } else {
+      // even-gaps: random positive weights for pieces and gaps, alternating
+      const pw: number[] = [];
+      const gw: number[] = [];
+      for (let i = 0; i < nArcs; i++) {
+        pw.push(0.35 + rng.next());
+        gw.push(0.35 + rng.next());
+      }
+      const pSum = pw.reduce((a, b) => a + b, 0);
+      const gSum = gw.reduce((a, b) => a + b, 0);
+      let cursor = rng.next(); // random offset; fold wraps it seamlessly
+      for (let i = 0; i < nArcs; i++) {
+        const w = (pw[i] / pSum) * coverage;
+        arcs.push({ s: cursor, e: cursor + w, hazard: false });
+        cursor += w + (gw[i] / gSum) * (1 - coverage);
+      }
     }
     // normalize arcs into [0,1) space (they may exceed 1; split them)
     const normArcs: Arc[] = [];
     for (const a of arcs) {
-      if (a.e <= 1) normArcs.push(a);
-      else if (a.s >= 1) normArcs.push({ s: a.s - 1, e: a.e - 1, hazard: a.hazard });
+      const base = Math.floor(a.s);
+      const s0 = a.s - base;
+      const e0 = a.e - base;
+      if (e0 <= 1) normArcs.push({ s: s0, e: e0, hazard: a.hazard });
       else {
-        normArcs.push({ s: a.s, e: 1, hazard: a.hazard });
-        normArcs.push({ s: 0, e: a.e - 1, hazard: a.hazard });
+        normArcs.push({ s: s0, e: 1, hazard: a.hazard });
+        normArcs.push({ s: 0, e: e0 - 1, hazard: a.hazard });
       }
     }
 
@@ -163,7 +209,7 @@ export class RingField {
     const hazardChance = Math.min(
       TUNING.HAZARD_CHANCE_MAX,
       TUNING.HAZARD_CHANCE_START + TUNING.HAZARD_CHANCE_PER_DEPTH * k
-    ) * phase.hazardMul * intensity;
+    ) * gen.hazardDensity * (0.7 + 0.3 * intensity);
     if (k >= 3 && rng.next() < hazardChance) {
       const idx = Math.floor(rng.next() * normArcs.length);
       const a = normArcs[idx];
@@ -223,10 +269,10 @@ export class RingField {
    * Sample the ring pattern at a world angle. Folds exactly like the
    * shaders do: mirror-fold into the wedge, then ring-rotation fold.
    */
-  sample(k: number, worldTheta: number, wedge: number): number {
+  sample(k: number, worldTheta: number, wedge: number, twist = 0): number {
     const ring = this.rings.get(k);
     if (!ring) return SAMPLE_NONE;
-    const a = foldAngle(worldTheta, wedge);
+    const a = twistFold(worldTheta, wedge, twist);
     const f = foldAngle(a - ring.phi, wedge) / wedge;
     const h = TUNING.PLAYER_HALF_ANG / wedge;
 
@@ -251,10 +297,10 @@ export class RingField {
    * double-fold as sample(); the fold slope is probed numerically so the
    * correction is applied in the right world direction.
    */
-  grabEdge(k: number, worldTheta: number, wedge: number): number | null {
+  grabEdge(k: number, worldTheta: number, wedge: number, twist = 0): number | null {
     const ring = this.rings.get(k);
     if (!ring) return null;
-    const fOf = (th: number) => foldAngle(foldAngle(th, wedge) - ring.phi, wedge) / wedge;
+    const fOf = (th: number) => foldAngle(twistFold(th, wedge, twist) - ring.phi, wedge) / wedge;
     const f = fOf(worldTheta);
     const range = TUNING.GRAB_RANGE_ANG / wedge;
     const inset = TUNING.GRAB_INSET_FRAC + TUNING.PLAYER_HALF_ANG / wedge;
@@ -281,7 +327,7 @@ export class RingField {
     const dTheta = (bestTarget - f) / slope;
     if (Math.abs(dTheta) > TUNING.GRAB_RANGE_ANG * 2.5) return null;
     // verify the destination really is standable (fold may kink in between)
-    if (this.sample(k, worldTheta + dTheta, wedge) !== SAMPLE_PLATFORM) return null;
+    if (this.sample(k, worldTheta + dTheta, wedge, twist) !== SAMPLE_PLATFORM) return null;
     return dTheta;
   }
 
@@ -289,13 +335,13 @@ export class RingField {
    * Collect motes near the player. Motes float half a spacing above
    * (inward of) their ring plane. Returns number collected.
    */
-  collectMotes(playerDepth: number, worldTheta: number, wedge: number): number {
+  collectMotes(playerDepth: number, worldTheta: number, wedge: number, twist = 0): number {
     let n = 0;
     for (const ring of this.rings.values()) {
       if (ring.motes.length === 0) continue;
       const moteDepth = (ring.depth + 0.55) * TUNING.RING_SPACING;
       if (Math.abs(playerDepth - moteDepth) > TUNING.MOTE_RADIAL_TOL) continue;
-      const f = foldAngle(worldTheta, wedge) / wedge;
+      const f = twistFold(worldTheta, wedge, twist) / wedge;
       for (const m of ring.motes) {
         if (m.taken) continue;
         if (fracDist(f, m.frac) < TUNING.MOTE_ANG_TOL) {

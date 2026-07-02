@@ -91,6 +91,23 @@ export class Menus {
     this.boot.style.display = 'none';
   }
 
+  /** tier-up whisper: "TIER III — THE NESTED DEEP" in glowing type */
+  showTierNote(tier: number, name: string, colorCss: string): void {
+    const el = document.getElementById('tierNote') as HTMLDivElement;
+    const numerals = ['0', 'I', 'II', 'III', 'IV', 'V'];
+    el.textContent = `TIER ${numerals[tier] ?? tier} — ${name}`;
+    el.style.color = colorCss;
+    el.classList.remove('show');
+    void el.offsetWidth; // restart the CSS animation
+    el.classList.add('show');
+  }
+
+  /** gallery mode: hide all chrome for clean auditions */
+  galleryMode(): void {
+    this.hideAll();
+    this.boot.style.display = 'none';
+  }
+
   showTitle(): void {
     this.hideAll();
     const best = bestScore();

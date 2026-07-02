@@ -29,11 +29,26 @@ gaps drop you toward the rim; falling off the outermost ring ends the run.
 If a jump barely misses a platform, the climber **grabs the ledge** and
 pulls himself up — edges are your friends.
 Skim a ring (land and leave within 0.5 s) to build your combo (up to ×8).
-Every ~40 s the world **Blooms** — palette, mirror count and rotation all
-shift while you play. Surviving one is worth +500 × blooms survived.
+
+The world **Blooms** on an accelerating schedule (45 s shrinking to 18 s):
+every Bloom rolls a fresh procedural **PhaseDNA** — cosine-gradient
+palette spanning the full color wheel (live hue drift, genomes morph
+across transitions), mirror count 5–16 with spiral twist, noise type,
+texture blend mode, platform/hazard shape language, ring layout rhythm.
+No two Blooms ever look alike; a per-tier visual-load budget and a
+contrast-verified hazard color keep it readable. Surviving one is worth
++500 × blooms survived. Every 2 Blooms unlocks a **surrealism tier**
+(shockwave, +1000, whispered title) with new visual permissions, up to
+DEEP VORTEX rule-breakers; every 3rd Bloom is a serene Lull breather.
 
 Runs are seeded and replayable: the game-over screen shows the seed, and
-`?seed=<seed>` in the URL replays that world.
+`?seed=<seed>` in the URL replays that world. Visual DNA rolls from a
+separate seeded stream, so layouts never change for a given seed.
+
+Dev tools: `?gallery[=secs]` auditions a fresh DNA on an interval (art
+direction mode; `node scripts/gallery.mjs` runs the acceptance sweep),
+`?dna=<urlencoded json>` forces one DNA for tuning; every Bloom logs its
+DNA as JSON.
 
 ## Architecture
 
@@ -51,7 +66,12 @@ Runs are seeded and replayable: the game-over screen shows the seed, and
   chromatic aberration, barrel distortion, breathing vignette, dash/death
   shockwaves, and letterbox margins filled with a darkened blurred copy of
   the scene (never black bars).
-- Every gameplay constant lives in `src/game/difficulty.ts`.
+- Every gameplay constant lives in `src/game/difficulty.ts`; everything
+  per-Bloom lives in `src/game/phases.ts` (PhaseDNA generation, the
+  constraint sanitizer, visual-load budgets, escalation tiers,
+  rule-breakers). Palettes are IQ cosine gradients evaluated to a LUT on
+  the CPU each frame (`render/palette.ts`) with enforced luminance bounds
+  and a ≥3:1 hazard/platform contrast invariant.
 - The climber is a procedurally animated stick figure (run cycle, tuck,
   flail, hang-and-pull-up, dash stretch) drawn as layered capsules — dark
   silhouette under a white-hot core so he reads over every palette.

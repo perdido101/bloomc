@@ -182,6 +182,8 @@ export class PostChain {
       zoomCy: number;
       vigColor: ArrayLike<number>;
       reduceFlash: boolean;
+      /** chromatic aberration base multiplier (tier 3+: 1.6) */
+      caScale: number;
     }
   ): void {
     renderer.render({ container: this.bright, target: this.brightRT, clear: true });
@@ -214,6 +216,8 @@ export class PostChain {
     vc[1] = opts.vigColor[1];
     vc[2] = opts.vigColor[2];
     (u.uParams as Float32Array)[1] = opts.reduceFlash ? 0.45 : 1.0;
+    (u.uParams as Float32Array)[2] = TUNING.CA_BASE * opts.caScale;
+    (u.uParams as Float32Array)[3] = TUNING.CA_RADIAL * opts.caScale;
 
     renderer.render({ container: this.composite, clear: true });
   }

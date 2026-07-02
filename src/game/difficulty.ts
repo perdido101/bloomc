@@ -29,10 +29,10 @@ export const TUNING = {
   SKIM_WINDOW_S: 0.5,       // land->leave within this = combo up
   COMBO_RESET_S: 1.5,       // standing longer than this resets combo
   COMBO_MAX: 8,
-  BLOOM_PERIOD_S: 40,       // seconds between Blooms
+  // Bloom cadence now escalates (phases.ts bloomPeriod: 45s shrinking to a
+  // floor of 18s); transition/countdown timing still lives here.
   BLOOM_TRANSITION_S: 3.0,
   BLOOM_COUNTDOWN_S: 5.0,
-  CYCLE_INTENSITY_GAIN: 1.08, // global intensity multiplier per full 4-phase cycle
 
   // --- movement feel (auto-run: the climber always runs, one-thumb play) ---
   RUN_SPEED_MIN: 0.34,      // rad/s floor for the auto-run, so rings feel alive
@@ -56,7 +56,7 @@ export const TUNING = {
   DEPTH_MAP_A: 3.0,         // screen mapping: n=(A - ringOffset)/B, sN=n^FISHEYE_EXP
   DEPTH_MAP_B: 7.9,         //   (chosen so the player's ring sits at ~55% radius)
   CAM_OMEGA: 12,            // critically damped camera spring (~0.35s settle)
-  VIEW_ROT_SPEED: 0.015,    // rad/s gentle global rotation; flips each Bloom
+  // global view rotation is now per-Bloom DNA (rotationDrift, ±0.008–0.028)
   RING_BAND_HALF: 1.2,      // radial half-thickness of a ring band, world units
 
   // --- pickups ---

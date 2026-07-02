@@ -2,11 +2,14 @@ import { autoDetectRenderer, Container, RenderTexture } from 'pixi.js';
 import type { Renderer } from 'pixi.js';
 import { TUNING } from './game/difficulty';
 import { GameState, StateMachine } from './game/state';
-import { PHASES, PhaseManager } from './game/phases';
-import { RingField, hashSeed } from './game/rings';
+import {
+  PhaseManager, generateDNA, sanitize,
+  type PhaseDNA, type RuleBreakerType,
+} from './game/phases';
+import { RingField, hashSeed, type WorldGen } from './game/rings';
 import { Input, Shard, type ShardEvents } from './game/player';
 import { Scoring, saveHighScore } from './game/scoring';
-import { PaletteLut, midColor } from './render/palette';
+import { PaletteLut } from './render/palette';
 import { getPhaseTextures, initTextures } from './render/textures';
 import { BackgroundPass } from './render/background';
 import { MirrorPass, WedgePass } from './render/kaleidoscope';
@@ -67,7 +70,6 @@ class Game {
   private camDepth = 0;
   private camVel = 0;
   private viewRot = 0;
-  private viewRotDir = 1;
 
   // fx state
   private time = 0;
@@ -80,10 +82,30 @@ class Game {
   private deathCx = 0.5;
   private deathCy = 0.5;
   private newBestPending = false;
-  private vigStops: string[] | null = null;
   private readonly vigColor = new Float32Array(3);
   private hudColorRev = -1;
   private dashVisT = 0;
+  // escalation / DNA state
+  private hueShift = 0;
+  private fisheyeExp: number = TUNING.FISHEYE_EXP;
+  private tierDipT = 0;
+  private strobeFlip = false;
+  private galleryEvery = 0; // >0 = gallery mode (?gallery), seconds per DNA
+  private galleryTimer = 0;
+  private galleryIdx = 0;
+  private galleryHues: number[] = [];
+  private readonly worldGen: WorldGen = {
+    gapScale: 1, hazardDensity: 1, tier: 0, layoutStyle: 'even-gaps',
+  };
+  private readonly bgParams = {
+    time: 0, seed: 7.3, phaseMix: 0, noiseType: 0, noiseScale: 3,
+    warp: 0.6, blendMode: 0, drift: 1, feedback: 0, nestedFold: 0,
+  };
+  private readonly wedgeOpts = {
+    wedge: Math.PI / 4, time: 0, beat: 0, texMix: 0, platStyle: 0,
+    hazStyle: 0, hazColor: new Float32Array(3), wobbleAmp: 0,
+    wobbleFreq: 1, spiralFlow: 0,
+  };
   private readonly climberPose = {
     x: 0, y: 0, posAngle: 0, omega: 0,
     state: 'run' as import('./render/shard').ClimberState,
@@ -102,7 +124,7 @@ class Game {
   private readonly mapDepth = (d: number): number => {
     const o = (d - this.camDepth) / TUNING.RING_SPACING;
     const n = Math.min(1, Math.max(0, (TUNING.DEPTH_MAP_A - o) / TUNING.DEPTH_MAP_B));
-    return Math.pow(n, TUNING.FISHEYE_EXP);
+    return Math.pow(n, this.fisheyeExp);
   };
 
   private readonly shardEvents: ShardEvents = {
@@ -146,28 +168,41 @@ class Game {
 
   constructor() {
     this.pm = new PhaseManager({
-      onBloomStart: () => {
+      onBloomStart: (from, to) => {
         if (this.fsm.is(GameState.RUN)) this.fsm.set(GameState.BLOOM_TRANSITION);
         audio.playSfx('bloom');
-        const cur = getPhaseTextures(this.pm.current.id);
-        const nxt = getPhaseTextures(this.pm.next.id);
+        const cur = getPhaseTextures(from.texId);
+        const nxt = getPhaseTextures(to.texId);
         this.pipeline.wedge.setTextures(cur.sourceA, nxt.sourceA);
         this.pipeline.bg.setTextures(cur.sourceB, nxt.sourceB);
       },
       onBloomMid: () => {
         this.field.dirFlip = this.pm.dirFlip;
-        this.viewRotDir = -this.viewRotDir;
-        this.bgSeed = (this.bgSeed * 16807) % 97 + 1; // deterministic-ish reseed
+        this.bgSeed = (this.bgSeed * 16807) % 97 + 1; // flow field reseeds
       },
       onBloomEnd: (blooms) => {
         if (this.fsm.is(GameState.BLOOM_TRANSITION)) this.fsm.set(GameState.RUN);
         if (this.shard.alive && this.fsm.playing) {
           this.scoring.onBloomSurvived(blooms);
         }
-        audio.setPhase(this.pm.current.id);
-        const tex = getPhaseTextures(this.pm.current.id);
+        audio.setPhase(this.pm.current.texId);
+        const tex = getPhaseTextures(this.pm.current.texId);
         this.pipeline.wedge.setTextures(tex.sourceA, tex.sourceA);
         this.pipeline.bg.setTextures(tex.sourceB, tex.sourceB);
+      },
+      onTierUp: (tier, name) => {
+        if (!this.fsm.playing) return;
+        this.menus.showTierNote(tier, name, this.lut.colorAt(0.85));
+        this.ripple = 1;          // full-screen symmetric shockwave
+        this.tierDipT = 0.5;      // brief 0.6× timescale dip
+        this.scoring.addBonus(1000);
+        audio.playSfx('tier');
+      },
+      onRuleBreaker: (type: RuleBreakerType) => {
+        // telegraphed by a golden ring flash
+        this.ripple = Math.max(this.ripple, 0.8);
+        this.caSpike = Math.max(this.caSpike, 0.4);
+        console.log(`[rule-breaker] ${type}`);
       },
     });
   }
@@ -209,6 +244,7 @@ class Game {
 
     audio.onBeat(() => {
       this.beatPulse = 1;
+      this.strobeFlip = !this.strobeFlip;
     });
 
     window.addEventListener('resize', () => {
@@ -226,10 +262,31 @@ class Game {
       }
     });
 
+    // dev params: ?dna= forces a DNA for every Bloom; ?gallery[=secs]
+    // auto-rolls a new DNA on an interval for art direction
+    const params = new URLSearchParams(location.search);
+    const dnaParam = params.get('dna');
+    if (dnaParam) {
+      try {
+        const dna = JSON.parse(decodeURIComponent(dnaParam)) as PhaseDNA;
+        sanitize(dna, dna.tier ?? 0, this.menus.settings.reduceFlash);
+        this.pm.forcedDNA = dna;
+        console.log('[dna] forced', dna);
+      } catch (e) {
+        console.warn('[dna] could not parse ?dna=', e);
+      }
+    }
+    if (params.has('gallery')) {
+      this.galleryEvery = Number(params.get('gallery')) || 8;
+    }
+
     // attract-mode world behind the title
     this.field = new RingField(hashSeed('attract'));
+    this.pm.reduceFlash = this.menus.settings.reduceFlash;
+    this.pm.reset(hashSeed('attract'));
     this.menus.hideBoot();
-    this.menus.showTitle();
+    if (this.galleryEvery > 0) this.menus.galleryMode();
+    else this.menus.showTitle();
     this.fsm.set(GameState.MENU);
 
     this.lastNow = performance.now();
@@ -242,9 +299,7 @@ class Game {
   private readonly debug: Record<string, unknown> = {
     // test hooks (no-ops unless invoked from the console/harness)
     warpToBloom: () => {
-      if (this.fsm.playing) {
-        this.pm.runTime = TUNING.BLOOM_PERIOD_S * (this.pm.bloomsDone + 1) - 0.5;
-      }
+      if (this.fsm.playing) this.pm.warp();
     },
     kill: () => {
       if (this.fsm.playing && this.shard.alive) {
@@ -267,6 +322,13 @@ class Game {
     d.seed = this.seedStr;
     d.runTime = this.pm.runTime;
     d.grabbing = this.shard.grabbing;
+    d.tier = this.pm.tier;
+    d.bloomIdx = this.pm.current?.index;
+    d.visualLoad = this.pm.current?.visualLoad;
+    d.hazContrast = this.lut.hazardContrast;
+    d.baseHue = this.pm.current?.palette.baseHue;
+    d.ruleBreaker = this.pm.ruleBreaker?.type ?? null;
+    d.galleryHues = this.galleryHues;
     // climber position in CSS px (for the test harness)
     d.px = (this.ox + (this.climberPose.x * 0.5 + 0.5) * this.square) / this.dpr;
     d.py = (this.oy + (-this.climberPose.y * 0.5 + 0.5) * this.square) / this.dpr;
@@ -288,7 +350,7 @@ class Game {
 
   private buildPipeline(): void {
     const S = this.square;
-    const glacia = getPhaseTextures(PHASES[0].id);
+    const glacia = getPhaseTextures('GLACIA');
     const sceneRT = RenderTexture.create({ width: S, height: S });
     const bg = new BackgroundPass(S >> 1, glacia.sourceB, this.lut.texture);
     const wedge = new WedgePass(S, glacia.sourceA, this.lut.texture);
@@ -310,8 +372,8 @@ class Game {
         sceneRT.destroy(true);
       },
     };
-    // restore current phase textures if not GLACIA
-    const tex = getPhaseTextures(this.pm.current.id);
+    // restore current phase textures
+    const tex = getPhaseTextures(this.pm.current?.texId ?? 'GLACIA');
     wedge.setTextures(tex.sourceA, tex.sourceA);
     bg.setTextures(tex.sourceB, tex.sourceB);
   }
@@ -328,7 +390,8 @@ class Game {
     audio.init();
     this.seedStr = this.urlSeed ?? randomSeed();
     this.field = new RingField(hashSeed(this.seedStr));
-    this.pm.reset();
+    this.pm.reduceFlash = this.menus.settings.reduceFlash;
+    this.pm.reset(hashSeed(this.seedStr));
     this.scoring.reset();
     this.shard.reset();
     this.hud.reset();
@@ -339,11 +402,12 @@ class Game {
     this.ripple = 0;
     this.newBestPending = false;
     this.field.dirFlip = 1;
+    this.hueShift = 0;
     this.input.clear();
-    const tex = getPhaseTextures(this.pm.current.id);
+    const tex = getPhaseTextures(this.pm.current.texId);
     this.pipeline.wedge.setTextures(tex.sourceA, tex.sourceA);
     this.pipeline.bg.setTextures(tex.sourceB, tex.sourceB);
-    audio.setPhase(this.pm.current.id);
+    audio.setPhase(this.pm.current.texId);
     const [x, y] = this.shardClipPos();
     this.shardVisual.reset(x, y);
     this.menus.showRun();
@@ -373,7 +437,7 @@ class Game {
     this.deathCx = x * 0.5 + 0.5;
     this.deathCy = y * 0.5 + 0.5;
     // shatter into mirrored fragments, absorbed into the mandala
-    const n = this.pm.collisionMirrorN;
+    const n = this.pm.active.mirrorN;
     const r = Math.hypot(x, y);
     const baseA = Math.atan2(y, x);
     for (let m = 0; m < n; m++) {
@@ -415,6 +479,7 @@ class Game {
 
     // timescale: death slow-mo; pause keeps the world drifting at 10%
     let scale = 1;
+    if (this.tierDipT > 0) scale = 0.6;
     if (this.fsm.is(GameState.DEATH)) scale = TUNING.DEATH_TIMESCALE;
     if (this.paused) scale = TUNING.PAUSE_TIMESCALE;
     const dt = dtRaw * scale;
@@ -425,36 +490,62 @@ class Game {
     this.ripple = Math.max(0, this.ripple - dtRaw * 1.6);
     this.dashVisT = Math.max(0, this.dashVisT - dt);
 
-    const phase = this.pm.current;
-    const nextPhase = this.pm.next;
-    const mix = this.pm.mix;
-    const speedMul =
-      lerp(phase.speedMul, nextPhase.speedMul, mix) *
-      this.pm.intensity *
-      this.pm.transitionSpeedBoost;
-    const wedgeCol = TWO_PI / this.pm.collisionMirrorN;
+    // tier-up timescale dip (0.6× for 0.5s)
+    if (this.tierDipT > 0) {
+      this.tierDipT -= dtRaw;
+      // (scale was computed above; apply the dip to this frame's dt)
+    }
+
+    const pm = this.pm;
+    pm.depth = this.scoring.deepestRing;
+    const cur = pm.current;
+    const nxt = pm.next;
+    const mix = pm.mix;
+    const active = pm.active;
+    const wedgeCol = TWO_PI / active.mirrorN;
+    const twistCol = active.mirrorTwist;
+    const speedMul = pm.speedMul;
+
+    // live palette: genome morph + hue drift (√intensity-scaled)
+    const drift = lerp(cur.palette.hueDriftSpeed, nxt.palette.hueDriftSpeed, mix);
+    this.hueShift = (this.hueShift + drift * Math.sqrt(pm.intensityVisual) * dt) % 360;
+    this.lut.update(cur.palette, nxt.palette, mix, this.hueShift);
+
+    // fisheye breathing (tier 2+) and the inverted-fisheye rule-breaker
+    let fx = TUNING.FISHEYE_EXP;
+    if (pm.tier >= 2) fx += 0.05 * Math.sin((this.time * TWO_PI) / 9);
+    if (pm.ruleBreaker?.type === 'fisheyeInvert') {
+      fx += Math.sin((Math.PI * pm.ruleBreaker.t) / pm.ruleBreaker.dur) * 0.45;
+    }
+    this.fisheyeExp = fx;
+
+    // gameplay knobs from the active DNA
+    this.worldGen.gapScale = active.gapScale;
+    this.worldGen.hazardDensity = active.hazardDensity;
+    this.worldGen.tier = active.tier;
+    this.worldGen.layoutStyle = active.layoutStyle;
+    this.shard.jumpBoost = pm.jumpBoost;
+    this.shard.coyoteMs = pm.coyoteMs;
 
     if (this.fsm.is(GameState.MENU, GameState.GAMEOVER)) {
-      // attract mode: gentle GLACIA drift, endless descent
+      // attract mode: endless gentle descent (gallery rolls DNA here too)
+      if (this.galleryEvery > 0) this.galleryTick(dtRaw);
       this.attractDepth += dt * 4;
       this.camDepth = this.attractDepth;
       const center = Math.max(3, Math.round(this.attractDepth / TUNING.RING_SPACING));
-      this.field.ensureWindow(center, PHASES[0], 1);
+      this.field.ensureWindow(center, this.worldGen, 1);
       this.field.update(dt, 0.7);
-      this.viewRot += TUNING.VIEW_ROT_SPEED * 2 * dt;
-      this.lut.setBlend(PHASES[0].stops, PHASES[0].stops, 0);
+      this.viewRot += cur.rotationDrift * 1.5 * dt;
     } else if (this.fsm.playing || this.fsm.is(GameState.DEATH)) {
       if (!this.paused) {
-        if (this.fsm.playing) this.pm.update(dt);
+        if (this.fsm.playing) pm.update(dt);
         this.field.update(dt, speedMul);
         const center = Math.max(TUNING.RING_WINDOW, this.shard.ringK);
-        this.field.ensureWindow(
-          center,
-          this.pm.inTransition && this.pm.transitionT >= 0.5 ? nextPhase : phase,
-          this.pm.intensity
-        );
+        this.field.ensureWindow(center, this.worldGen, pm.intensityGame);
         if (this.fsm.playing) {
-          this.shard.update(dt, this.input, this.field, wedgeCol, speedMul, this.shardEvents);
+          this.shard.update(
+            dt, this.input, this.field, wedgeCol, speedMul, this.shardEvents, twistCol
+          );
           if (this.shard.onRing) this.scoring.onStanding(this.shard.standTime);
         }
         // camera: critically damped spring to the current ring
@@ -463,9 +554,9 @@ class Game {
         const acc = W * W * (target - this.camDepth) - 2 * W * this.camVel;
         this.camVel += acc * dt;
         this.camDepth += this.camVel * dt;
-        this.viewRot += TUNING.VIEW_ROT_SPEED * this.viewRotDir * dt;
+        const rot = lerp(cur.rotationDrift, nxt.rotationDrift, mix);
+        this.viewRot += rot * Math.sqrt(pm.intensityVisual) * dt;
       }
-      this.lut.setBlend(phase.stops, nextPhase.stops, mix);
 
       if (this.fsm.is(GameState.DEATH)) {
         this.deathT += dtRaw;
@@ -482,43 +573,97 @@ class Game {
       this.ripple = 1; // full-screen symmetric shockwave
     }
 
-    this.render(dtRaw, dt, wedgeCol, mix, phase, nextPhase);
+    this.render(dtRaw, dt, wedgeCol, mix, cur, nxt);
     this.updateDebug();
   };
+
+  /** ?gallery mode: audition a fresh DNA every few seconds (wall time) */
+  private galleryTick(dtRaw: number): void {
+    this.galleryTimer -= dtRaw;
+    if (this.galleryTimer > 0) return;
+    this.galleryTimer = this.galleryEvery;
+    this.galleryIdx++;
+    const dna = generateDNA(
+      hashSeed(`gallery:${this.galleryIdx}`),
+      this.galleryIdx, // index drives the tier ramp: tier 4 by roll 8
+      this.pm.current,
+      this.menus.settings.reduceFlash
+    );
+    this.pm.current = dna;
+    this.pm.next = dna;
+    this.galleryHues.push(dna.palette.baseHue);
+    this.bgSeed = (this.bgSeed * 16807) % 97 + 1;
+    const tex = getPhaseTextures(dna.texId);
+    this.pipeline.wedge.setTextures(tex.sourceA, tex.sourceA);
+    this.pipeline.bg.setTextures(tex.sourceB, tex.sourceB);
+    console.log(
+      `[gallery ${this.galleryIdx}] tier ${dna.tier} load ${dna.visualLoad} hue ${Math.round(dna.palette.baseHue)} hazContrast ${this.lut.hazardContrast} :: ${JSON.stringify(dna)}`
+    );
+  }
 
   private render(
     dtRaw: number,
     dt: number,
     wedgeCol: number,
     mix: number,
-    phase: (typeof PHASES)[number],
-    nextPhase: (typeof PHASES)[number]
+    cur: PhaseDNA,
+    nxt: PhaseDNA
   ): void {
     const p = this.pipeline;
     const r = this.renderer;
+    const pm = this.pm;
+    const active = pm.active;
+    const NOISE_IDX = { fbm: 0, ridged: 1, curl: 2, voronoiFlow: 3, domainWarp2x: 4 } as const;
+    const BLEND_IDX = { mix: 0, screen: 1, overlay: 2, difference: 3 } as const;
+    const PLAT_IDX = { crystal: 0, petal: 1, wave: 2, filament: 3 } as const;
+    const HAZ_IDX = { spike: 0, thorn: 1, razorPetal: 2, ember: 3 } as const;
 
-    p.bg.render(r, this.time, this.bgSeed, mix);
+    // background driven by the active DNA
+    const bp = this.bgParams;
+    bp.time = this.time;
+    bp.seed = this.bgSeed;
+    bp.phaseMix = mix;
+    bp.noiseType = NOISE_IDX[active.noiseType];
+    bp.noiseScale = lerp(cur.noiseScale, nxt.noiseScale, mix);
+    bp.warp = lerp(cur.warpStrength, nxt.warpStrength, mix);
+    bp.blendMode =
+      pm.ruleBreaker?.type === 'diffBlend' ? 3 : BLEND_IDX[active.texBlendMode];
+    bp.drift = lerp(cur.texDriftSpeed, nxt.texDriftSpeed, mix);
+    bp.feedback = lerp(cur.flowFeedback, nxt.flowFeedback, mix);
+    bp.nestedFold = active.nestedKaleido ? TWO_PI / Math.max(2, active.mirrorN / 2) : 0;
+    p.bg.render(r, bp);
 
     const centerK = this.fsm.is(GameState.MENU, GameState.GAMEOVER)
       ? Math.max(3, Math.round(this.attractDepth / TUNING.RING_SPACING))
       : Math.max(TUNING.RING_WINDOW, this.shard.ringK);
-    p.wedge.updateWorld(
-      this.field,
-      centerK,
-      this.mapDepth,
-      wedgeCol,
-      this.time,
-      this.beatPulse,
-      mix
-    );
+    const wo = this.wedgeOpts;
+    wo.wedge = wedgeCol;
+    wo.time = this.time;
+    wo.beat = this.beatPulse;
+    wo.texMix = mix;
+    wo.platStyle = PLAT_IDX[active.platformStyle];
+    wo.hazStyle = HAZ_IDX[active.hazardStyle];
+    wo.hazColor.set(this.lut.hazardColor);
+    wo.wobbleAmp = lerp(cur.wobble.amp, nxt.wobble.amp, mix);
+    wo.wobbleFreq = lerp(cur.wobble.freq, nxt.wobble.freq, mix);
+    wo.spiralFlow = lerp(cur.spiralFlow, nxt.spiralFlow, mix);
+    p.wedge.updateWorld(this.field, centerK, this.mapDepth, wo);
     p.wedge.render(r);
 
+    // mirror strobe rule-breaker: flick between the two folds on the beat
+    let mirrorMix = mix;
+    if (pm.ruleBreaker?.type === 'mirrorStrobe') {
+      mirrorMix = this.strobeFlip ? 1 : 0;
+    }
+    p.mirror.setSources(p.wedge.rt, p.bg.rt); // bg ping-pongs each frame
     p.mirror.render(
       r,
       p.sceneRT,
-      TWO_PI / phase.mirrorN,
-      TWO_PI / nextPhase.mirrorN,
-      mix,
+      TWO_PI / cur.mirrorN,
+      TWO_PI / nxt.mirrorN,
+      cur.mirrorTwist,
+      nxt.mirrorTwist,
+      mirrorMix,
       this.viewRot
     );
 
@@ -544,14 +689,7 @@ class Game {
     this.particles.update(dt);
     r.render({ container: p.playerLayer, target: p.sceneRT, clear: false });
 
-    const vigStops = mix < 0.5 ? phase.stops : nextPhase.stops;
-    if (vigStops !== this.vigStops) {
-      this.vigStops = vigStops;
-      const c = midColor(vigStops);
-      this.vigColor[0] = c[0];
-      this.vigColor[1] = c[1];
-      this.vigColor[2] = c[2];
-    }
+    this.lut.colorFloatAt(0.3, this.vigColor);
     p.post.render(r, {
       screenW: this.pw,
       screenH: this.ph,
@@ -566,6 +704,7 @@ class Game {
       zoomCy: this.deathCy,
       vigColor: this.vigColor,
       reduceFlash: this.menus.settings.reduceFlash,
+      caScale: pm.tier >= 3 ? 1.6 : 1,
     });
 
     // HUD on top (screen space)

@@ -151,6 +151,9 @@ export class Shard {
   grabT = -1;
   /** total tangential angular velocity this frame (for the animator) */
   tangentOmega = 0;
+  /** escalation compensation (set by the game per tier) */
+  jumpBoost = 1;
+  coyoteMs: number = TUNING.COYOTE_MS;
   private grabRing = 0;
   private grabFromTheta = 0;
   private grabToTheta = 0;
@@ -182,7 +185,8 @@ export class Shard {
     field: RingField,
     wedge: number,
     ringSpeedMul: number,
-    ev: ShardEvents
+    ev: ShardEvents,
+    twist = 0
   ): void {
     if (!this.alive || dt <= 0) return;
     const S = TUNING.RING_SPACING;
@@ -227,7 +231,7 @@ export class Shard {
     // --- standing support / hazards ---
     if (this.onRing) {
       this.standTime += dt;
-      const s = field.sample(this.ringK, this.theta, wedge);
+      const s = field.sample(this.ringK, this.theta, wedge, twist);
       if (s === SAMPLE_HAZARD && this.intangibleT <= 0) {
         this.die('hazard', ev);
         return;
@@ -237,7 +241,7 @@ export class Shard {
         this.onRing = false;
         this.vel = 0;
         this.angVel = ringOmega + this.moveVel;
-        this.coyoteT = TUNING.COYOTE_MS / 1000;
+        this.coyoteT = this.coyoteMs / 1000;
         ev.onLeave?.(this.standTime);
       }
     }
@@ -251,7 +255,7 @@ export class Shard {
       }
       this.onRing = false;
       this.coyoteT = 0;
-      this.vel = TUNING.JUMP_IMPULSE;
+      this.vel = TUNING.JUMP_IMPULSE * this.jumpBoost;
       this.dashUsed = false;
       ev.onJump?.();
     }
@@ -279,7 +283,7 @@ export class Shard {
           if (k < 0) break;
           const plane = k * S;
           if (prev < plane || this.depth > plane) continue;
-          const s = field.sample(k, this.theta, wedge);
+          const s = field.sample(k, this.theta, wedge, twist);
           if (s === SAMPLE_HAZARD && this.intangibleT <= 0) {
             this.die('hazard', ev);
             return;
@@ -289,7 +293,7 @@ export class Shard {
             break;
           }
           // just missed: the climber catches the ledge and pulls up
-          const dTheta = field.grabEdge(k, this.theta, wedge);
+          const dTheta = field.grabEdge(k, this.theta, wedge, twist);
           if (dTheta !== null) {
             this.grabT = 0;
             this.grabRing = k;
@@ -312,7 +316,7 @@ export class Shard {
     }
 
     // --- motes ---
-    const collected = field.collectMotes(this.depth, this.theta, wedge);
+    const collected = field.collectMotes(this.depth, this.theta, wedge, twist);
     if (collected > 0) ev.onMote?.(collected);
   }
 

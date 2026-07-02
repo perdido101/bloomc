@@ -73,6 +73,22 @@
     #pauseVeil { background: rgba(2, 4, 12, 0.72); backdrop-filter: blur(2px); }
     #pauseVeil h2 { font-size: min(6vw, 36px); font-weight: 300; letter-spacing: 0.5em; text-indent: 0.5em; }
 
+    @keyframes tiernote {
+      0% { opacity: 0; transform: scale(0.8); letter-spacing: 0.3em; }
+      18% { opacity: 1; transform: scale(1.06); }
+      30% { transform: scale(1); }
+      78% { opacity: 1; letter-spacing: 0.5em; }
+      100% { opacity: 0; letter-spacing: 0.62em; }
+    }
+    #tierNote {
+      position: absolute; inset: 0; display: none;
+      align-items: center; justify-content: center; text-align: center;
+      font-size: min(6vw, 34px); font-weight: 300; color: #ffffff;
+      letter-spacing: 0.4em; text-indent: 0.4em; pointer-events: none;
+      text-shadow: 0 0 22px currentColor, 0 0 70px currentColor;
+    }
+    #tierNote.show { display: flex; animation: tiernote 3.2s ease-out forwards; }
+
     .fade { transition: opacity 0.5s ease; }
     #bootMsg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
                font-size: 14px; letter-spacing: 0.4em; opacity: 0.5; }
@@ -111,6 +127,8 @@
         <label><input type="checkbox" id="optSound2" checked /> sound</label>
       </div>
     </div>
+
+    <div id="tierNote"></div>
 
     <button id="pauseBtn" aria-label="pause">◈</button>
   </div>

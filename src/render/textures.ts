@@ -1,8 +1,17 @@
 import { Assets, RenderTexture, Texture } from 'pixi.js';
 import type { Renderer } from 'pixi.js';
-import { PHASES, type PhaseId } from '../game/phases';
-import { midColor, hexToRgb } from './palette';
+import { TEX_IDS, type PhaseId } from '../game/phases';
 import { quadMesh } from './gfx';
+
+// Placeholder tints per source pair. Shaders read these textures mostly for
+// luminance/structure — actual color always comes from the live palette LUT —
+// so the tints only need to give each pair a distinct character.
+const TINTS: Record<PhaseId, { deep: [number, number, number]; mid: [number, number, number] }> = {
+  GLACIA: { deep: [0.04, 0.08, 0.25], mid: [0.5, 0.85, 0.95] },
+  NEBULA: { deep: [0.14, 0.1, 0.32], mid: [0.75, 0.4, 0.85] },
+  INFERNA: { deep: [0.13, 0.0, 0.02], mid: [0.9, 0.45, 0.2] },
+  VERDANT: { deep: [0.01, 0.17, 0.17], mid: [0.5, 0.85, 0.35] },
+};
 
 /**
  * Texture placeholder system (§9).
@@ -71,9 +80,8 @@ void main() {
 `;
 
 function makePlaceholder(renderer: Renderer, phaseId: PhaseId, slot: 'a' | 'b'): Texture {
-  const phase = PHASES.find((p) => p.id === phaseId)!;
-  const mid = midColor(phase.stops);
-  const deep = hexToRgb(phase.stops[0]).map((v) => v / 255);
+  const mid = TINTS[phaseId].mid;
+  const deep = TINTS[phaseId].deep;
   const seed = phaseId.charCodeAt(0) * 0.13 + (slot === 'a' ? 1.7 : 9.2);
   const mesh = quadMesh(
     PLACEHOLDER_FRAG,
@@ -124,13 +132,13 @@ export async function initTextures(renderer: Renderer): Promise<void> {
     console.log('[textures] no manifest found; using placeholders for all phases');
   }
   await Promise.all(
-    PHASES.map(async (phase) => {
-      const entry = manifest[phase.id];
+    TEX_IDS.map(async (id) => {
+      const entry = manifest[id];
       const [a, b] = await Promise.all([
-        loadOrPlaceholder(renderer, phase.id, 'a', entry?.a),
-        loadOrPlaceholder(renderer, phase.id, 'b', entry?.b),
+        loadOrPlaceholder(renderer, id, 'a', entry?.a),
+        loadOrPlaceholder(renderer, id, 'b', entry?.b),
       ]);
-      registry.set(phase.id, { sourceA: a, sourceB: b });
+      registry.set(id, { sourceA: a, sourceB: b });
     })
   );
 }

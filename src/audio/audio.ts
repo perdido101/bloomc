@@ -11,7 +11,7 @@ import type { PhaseId } from '../game/phases';
 
 export type SfxName =
   | 'jump' | 'dash' | 'land' | 'skim' | 'mote'
-  | 'grab' | 'hazard' | 'bloom' | 'death' | 'newbest';
+  | 'grab' | 'hazard' | 'bloom' | 'death' | 'newbest' | 'tier';
 
 type BeatCb = (beatIndex: number) => void;
 
@@ -128,6 +128,12 @@ class AudioSys {
       case 'death':
         this.tone(420, 60, 0.9, 'triangle', 0.5);
         this.tone(210, 40, 1.1, 'sine', 0.4, 0.05);
+        break;
+      case 'tier':
+        for (let i = 0; i < 4; i++) {
+          const f = 330 * Math.pow(2, [0, 5, 9, 14][i] / 12);
+          this.tone(f, f * 1.01, 0.3, 'sine', 0.28, i * 0.11);
+        }
         break;
       case 'newbest':
         for (let i = 0; i < 5; i++) {
