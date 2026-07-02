@@ -7,7 +7,7 @@ import {
   type PhaseDNA, type RuleBreakerType,
 } from './game/phases';
 import { RingField, hashSeed, type WorldGen } from './game/rings';
-import { Input, Shard, type ShardEvents } from './game/player';
+import { Input, Runner, type RunnerEvents } from './game/player';
 import { Scoring, saveHighScore } from './game/scoring';
 import { PaletteLut } from './render/palette';
 import { getPhaseTextures, initTextures } from './render/textures';
@@ -51,7 +51,7 @@ class Game {
   private fsm = new StateMachine();
   private pm: PhaseManager;
   private field!: RingField;
-  private shard = new Shard();
+  private runner = new Runner();
   private scoring = new Scoring();
   private shardVisual!: ShardVisual;
   private particles!: Particles;
@@ -67,9 +67,9 @@ class Game {
   private oy = 0;
   private dpr = 1;
 
-  // camera + view
+  // camera + view (the wisp is pinned to the bottom; steering rotates
+  // the tunnel: viewRot chases -theta - PI/2)
   private camDepth = 0;
-  private camVel = 0;
   private viewRot = 0;
 
   // fx state
@@ -91,9 +91,6 @@ class Game {
   private worldAlpha = 1;
   /** smoothed ink-mode amount (settings toggle, eased) */
   private inkAmt = 0;
-  /** render-only smoothed radial position (softens landing snaps) */
-  private visDepth = 0;
-  private visDepthVel = 0;
   // escalation / DNA state
   private hueShift = 0;
   private fisheyeExp: number = TUNING.FISHEYE_EXP;
@@ -121,7 +118,7 @@ class Game {
   private readonly climberPose = {
     x: 0, y: 0, posAngle: 0, omega: 0,
     state: 'run' as import('./render/shard').ClimberState,
-    grabT: -1, size: 0.055,
+    grabT: -1, size: 0.06,
   };
 
   // attract mode
@@ -139,7 +136,19 @@ class Game {
     return Math.pow(n, this.fisheyeExp);
   };
 
-  private readonly shardEvents: ShardEvents = {
+  private readonly runnerEvents: RunnerEvents = {
+    onPass: (k, viaDoor, graze) => {
+      this.scoring.onPass(k, viaDoor);
+      audio.playSfx('land');
+      const sp = this.shardClipPos();
+      this.particles.burst(sp[0], sp[1], viaDoor ? 8 : 12, 0.45, 0.4, 0.015, 0.85, 0.95, 1);
+      this.shardVisual.squash = viaDoor ? 0.35 : 0.7;
+      if (graze) {
+        this.scoring.onGraze();
+        audio.playSfx('skim');
+        this.particles.burst(sp[0], sp[1], 16, 0.7, 0.5, 0.017, 1, 0.9, 0.6);
+      }
+    },
     onJump: () => audio.playSfx('jump'),
     onDash: () => {
       audio.playSfx('dash');
@@ -149,38 +158,12 @@ class Game {
       const sp = this.shardClipPos();
       this.particles.burst(sp[0], sp[1], 26, 0.9, 0.5, 0.02, 0.7, 0.9, 1);
     },
-    onLand: (k) => {
-      const gained = this.scoring.onLand(k);
-      audio.playSfx('land');
-      const sp = this.shardClipPos();
-      this.particles.burst(sp[0], sp[1], gained > 0 ? 14 : 8, 0.4, 0.45, 0.016, 0.85, 0.95, 1);
-      this.shardVisual.flash = 0.7;
-      this.shardVisual.squash = 1;
-    },
-    onLeave: (dur) => {
-      if (this.scoring.onLeave(dur)) {
-        audio.playSfx('skim');
-        const sp = this.shardClipPos();
-        this.particles.burst(sp[0], sp[1], 18, 0.7, 0.55, 0.018, 1, 0.9, 0.6);
-      }
-    },
+    onBrake: () => audio.playSfx('grab'),
     onMote: (n) => {
       this.scoring.onMote(n);
       audio.playSfx('mote');
       const sp = this.shardClipPos();
       this.particles.burst(sp[0], sp[1], 16, 0.5, 0.6, 0.017, 0.65, 1, 0.9);
-    },
-    onBounce: () => {
-      audio.playSfx('bounce');
-      this.shardVisual.squash = 0.8;
-      const sp = this.shardClipPos();
-      this.particles.burst(sp[0], sp[1], 8, 0.35, 0.35, 0.014, 0.7, 0.8, 1);
-    },
-    onGrab: () => {
-      audio.playSfx('grab');
-      const sp = this.shardClipPos();
-      this.particles.burst(sp[0], sp[1], 10, 0.3, 0.4, 0.014, 0.9, 0.95, 1);
-      this.shardVisual.flash = 0.5;
     },
     onDie: (cause) => this.beginDeath(cause),
   };
@@ -201,7 +184,7 @@ class Game {
       },
       onBloomEnd: (blooms) => {
         if (this.fsm.is(GameState.BLOOM_TRANSITION)) this.fsm.set(GameState.RUN);
-        if (this.shard.alive && this.fsm.playing) {
+        if (this.runner.alive && this.fsm.playing) {
           this.scoring.onBloomSurvived(blooms);
         }
         audio.setPhase(this.pm.current.texId);
@@ -327,9 +310,9 @@ class Game {
       if (this.fsm.playing) this.pm.warp();
     },
     kill: () => {
-      if (this.fsm.playing && this.shard.alive) {
-        this.shard.alive = false;
-        this.beginDeath('fall');
+      if (this.fsm.playing && this.runner.alive) {
+        this.runner.alive = false;
+        this.beginDeath('wall');
       }
     },
   };
@@ -339,14 +322,14 @@ class Game {
     d.state = this.fsm.state;
     d.score = this.scoring.score;
     d.combo = this.scoring.combo;
-    d.ringK = this.shard.ringK;
-    d.depth = this.shard.depth;
-    d.onRing = this.shard.onRing;
-    d.alive = this.shard.alive;
+    d.ringK = this.runner.ringK;
+    d.depth = this.runner.z;
+    d.onRing = true;
+    d.alive = this.runner.alive;
     d.blooms = this.pm.bloomsDone;
     d.seed = this.seedStr;
     d.runTime = this.pm.runTime;
-    d.grabbing = this.shard.grabbing;
+    d.grabbing = false;
     d.tier = this.pm.tier;
     d.bloomIdx = this.pm.current?.index;
     d.visualLoad = this.pm.current?.visualLoad;
@@ -418,13 +401,10 @@ class Game {
     this.pm.reduceFlash = this.menus.settings.reduceFlash;
     this.pm.reset(hashSeed(this.seedStr));
     this.scoring.reset();
-    this.shard.reset();
+    this.runner.reset();
     this.hud.reset();
     this.particles.clear();
-    this.camDepth = 0;
-    this.camVel = 0;
-    this.visDepth = 0;
-    this.visDepthVel = 0;
+    this.camDepth = this.runner.z;
     this.zoom = 0;
     this.ripple = 0;
     this.newBestPending = false;
@@ -446,7 +426,7 @@ class Game {
     this.worldGen.layoutStyle = cur.layoutStyle;
     this.worldGen.wedge = TWO_PI / cur.mirrorN;
     this.field.ensureWindow(TUNING.RING_WINDOW, this.worldGen, this.pm.intensityGame);
-    this.shard.theta = this.field.findSolid(0, this.worldGen.wedge, cur.mirrorTwist);
+    this.viewRot = -this.runner.theta - Math.PI / 2; // pin to the bottom
     const [x, y] = this.shardClipPos();
     this.shardVisual.reset(x, y);
     this.menus.showRun();
@@ -465,7 +445,7 @@ class Game {
     }
   }
 
-  private beginDeath(cause: 'fall' | 'hazard'): void {
+  private beginDeath(cause: 'wall' | 'hazard'): void {
     audio.playSfx(cause === 'hazard' ? 'hazard' : 'death');
     audio.playSfx('death');
     this.caSpike = 1;
@@ -502,31 +482,19 @@ class Game {
 
   private readonly shardPos = new Float32Array(2);
 
-  /** shard position in square clip space (reuses a scratch array).
-   *  Uses the render-smoothed depth so landings settle instead of snapping. */
+  /** wisp position in square clip space (reuses a scratch array).
+   *  A jump arcs the wisp slightly toward the camera (outward). */
   private shardClipPos(): Float32Array {
-    const sN = this.mapDepth(this.visDepth);
-    const a = this.shard.theta + this.viewRot;
+    const jumpP = this.runner.jumpT > 0 ? 1 - this.runner.jumpT / TUNING.JUMP_WINDOW_S : -1;
+    const lift = jumpP >= 0 ? Math.sin(Math.PI * jumpP) * 0.055 : 0;
+    const sN = this.mapDepth(this.runner.z) + lift;
+    const a = this.runner.theta + this.viewRot;
     this.shardPos[0] = sN * Math.cos(a);
     this.shardPos[1] = sN * Math.sin(a);
     return this.shardPos;
   }
 
-  private updateVisDepth(dt: number): void {
-    const diff = this.shard.depth - this.visDepth;
-    if (Math.abs(diff) > 4 || dt <= 0) {
-      // teleports (reset) snap instantly
-      this.visDepth = this.shard.depth;
-      this.visDepthVel = 0;
-      return;
-    }
-    // stiff critically-damped spring: ~70ms settle, invisible in the air,
-    // takes the harsh edge off landings and grab pull-ups
-    const W = 30;
-    const acc = W * W * diff - 2 * W * this.visDepthVel;
-    this.visDepthVel += acc * dt;
-    this.visDepth += this.visDepthVel * dt;
-  }
+
 
   private readonly tick = (now: number): void => {
     this.rafId = requestAnimationFrame(this.tick);
@@ -582,8 +550,6 @@ class Game {
     this.worldGen.tier = active.tier;
     this.worldGen.layoutStyle = active.layoutStyle;
     this.worldGen.wedge = wedgeCol;
-    this.shard.jumpBoost = pm.jumpBoost;
-    this.shard.coyoteMs = pm.coyoteMs;
 
     // rings fade away behind the main menu (splash & gameplay show them)
     const wantWorld =
@@ -609,22 +575,26 @@ class Game {
       if (!this.paused) {
         if (this.fsm.playing) pm.update(dt);
         this.field.update(dt, speedMul);
-        const center = Math.max(TUNING.RING_WINDOW, this.shard.ringK);
+        const center = Math.max(
+          TUNING.RING_WINDOW,
+          Math.floor(this.runner.z / TUNING.RING_SPACING) + 1
+        );
         this.field.ensureWindow(center, this.worldGen, pm.intensityGame);
         if (this.fsm.playing) {
-          this.shard.update(
-            dt, this.input, this.field, wedgeCol, speedMul, this.shardEvents, twistCol
+          // forward pace: base × Bloom pace × takeoff ramp after DESCEND
+          const takeoff = Math.min(1, 0.35 + (pm.runTime / TUNING.FLY_TAKEOFF_S) * 0.65);
+          const fly = TUNING.FLY_SPEED_BASE * (0.75 + 0.25 * speedMul) * takeoff;
+          this.runner.update(
+            dt, this.input, this.field, wedgeCol, fly, this.runnerEvents, twistCol
           );
-          if (this.shard.onRing) this.scoring.onStanding(this.shard.standTime);
         }
-        // camera: critically damped spring to the current ring
-        const target = this.shard.ringK * TUNING.RING_SPACING;
-        const W = TUNING.CAM_OMEGA;
-        const acc = W * W * (target - this.camDepth) - 2 * W * this.camVel;
-        this.camVel += acc * dt;
-        this.camDepth += this.camVel * dt;
-        const rot = lerp(cur.rotationDrift, nxt.rotationDrift, mix);
-        this.viewRot += rot * Math.sqrt(pm.intensityVisual) * dt;
+        // camera locks to the flight; steering rotates the tunnel so the
+        // wisp stays pinned at the bottom of the screen
+        this.camDepth = this.runner.z;
+        const targetRot = -this.runner.theta - Math.PI / 2;
+        let dRot = targetRot - this.viewRot;
+        dRot = ((dRot + Math.PI) % TWO_PI + TWO_PI) % TWO_PI - Math.PI;
+        this.viewRot += dRot * (1 - Math.exp(-14 * dt));
       }
 
       if (this.fsm.is(GameState.DEATH)) {
@@ -642,7 +612,6 @@ class Game {
       this.ripple = 1; // full-screen symmetric shockwave
     }
 
-    this.updateVisDepth(dt);
     this.render(dtRaw, dt, wedgeCol, mix, cur, nxt);
     this.updateDebug();
   };
@@ -705,7 +674,7 @@ class Game {
 
     const centerK = this.fsm.is(GameState.MENU, GameState.GAMEOVER)
       ? Math.max(3, Math.round(this.attractDepth / TUNING.RING_SPACING))
-      : Math.max(TUNING.RING_WINDOW, this.shard.ringK);
+      : Math.max(TUNING.RING_WINDOW, Math.floor(this.runner.z / TUNING.RING_SPACING) + 1);
     const wo = this.wedgeOpts;
     wo.wedge = wedgeCol;
     wo.time = this.time;
@@ -739,23 +708,15 @@ class Game {
     );
 
     // player pass: climber + trail + particles, unmirrored, on top
-    const showShard = (this.fsm.playing && this.shard.alive) && !this.paused;
+    const showShard = (this.fsm.playing && this.runner.alive) && !this.paused;
     const sp = this.shardClipPos();
     const pose = this.climberPose;
     pose.x = sp[0];
     pose.y = sp[1];
-    pose.posAngle = this.shard.theta + this.viewRot;
-    pose.grabT = this.shard.grabT;
-    if (this.shard.grabbing) {
-      pose.state = 'grab';
-      pose.omega = this.shard.tangentOmega;
-    } else if (this.shard.onRing) {
-      pose.state = 'run';
-      pose.omega = this.shard.moveVel; // run animation is relative to the ring
-    } else {
-      pose.state = this.dashVisT > 0 ? 'dash' : this.shard.vel > 3 ? 'rise' : 'fall';
-      pose.omega = this.shard.moveVel;
-    }
+    pose.posAngle = this.runner.theta + this.viewRot;
+    pose.grabT = -1;
+    pose.state = this.dashVisT > 0 ? 'dash' : this.runner.jumpT > 0 ? 'rise' : 'run';
+    pose.omega = this.runner.tangentOmega;
     this.shardVisual.update(dtRaw, pose, this.time, showShard);
     this.particles.update(dt);
     r.render({ container: p.playerLayer, target: p.sceneRT, clear: false });
@@ -817,8 +778,8 @@ class Game {
         dt,
         this.scoring.score,
         this.scoring.combo,
-        this.shard.standTime,
-        this.shard.onRing,
+        0,
+        false,
         this.pm.countdown,
         this.pm.transitionT,
         this.time

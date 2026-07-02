@@ -60,10 +60,11 @@ void main() {
     vec4 R = uRings[i];
     if (R.y <= 0.0) continue;
     float mid = (R.x + R.y) * 0.5;
-    float halfW = (R.y - R.x) * 0.5 * (1.0 + 0.015 * uBeat); // beat pulse
+    float lowMul = R.w < 0.0 ? 0.45 : 1.0; // low walls: thin, jumpable
+    float halfW = (R.y - R.x) * 0.5 * (1.0 + 0.015 * uBeat) * lowMul;
     float dr = sN - mid;
     if (abs(dr) > halfW * 3.2) continue;
-    float fade = R.w;
+    float fade = abs(R.w) * (R.w < 0.0 ? 0.75 : 1.0);
 
     // ring-rotation fold inside the wedge (matches RingField.sample)
     float f = fold(ang - R.z, uWedge) / uWedge;
@@ -148,15 +149,16 @@ void main() {
     }
   }
 
-  // prisma motes: glowing seeds, static in mirror space
+  // prisma motes: glowing seeds riding their ring, marking its doorways
   for (int j = 0; j < ${MAX_MOTES}; j++) {
     vec4 M = uMotes[j];
     if (M.z < 0.5) continue;
-    float df = min(abs(vUV.y - M.y), min(vUV.y + M.y, 2.0 - vUV.y - M.y));
+    float fm = fold(ang - M.w, uWedge) / uWedge; // pattern space (M.w = ring phi)
+    float df = min(abs(fm - M.y), min(fm + M.y, 2.0 - fm - M.y));
     float dx = df * uWedge * max(sN, 0.05); // arc length in sN units
     float dy = sN - M.x;
     float d2 = dx * dx + dy * dy;
-    float tw = 0.75 + 0.25 * sin(uTime * 3.0 + M.w * 17.0);
+    float tw = 0.75 + 0.25 * sin(uTime * 3.0 + M.y * 17.0);
     float core = exp(-d2 * 18000.0);
     float halo = exp(-d2 * 1600.0) * 0.35;
     vec3 mc = (lut(0.95) * 0.9 + vec3(0.5)) * core + lut(0.8) * halo;
@@ -299,7 +301,7 @@ export class WedgePass {
       rings[i * 4] = sInner;
       rings[i * 4 + 1] = sOuter;
       rings[i * 4 + 2] = ring.phi;
-      rings[i * 4 + 3] = fade;
+      rings[i * 4 + 3] = ring.low ? -fade : fade; // sign encodes LOW walls
 
       let slot = 0;
       for (const a of ring.arcs) {
@@ -321,10 +323,10 @@ export class WedgePass {
       for (const m of ring.motes) {
         if (m.taken || moteSlot >= MAX_MOTES) continue;
         const o = moteSlot * 4;
-        motes[o] = mapDepth((k + 0.55) * S);
+        motes[o] = mapDepth((k - 0.45) * S);
         motes[o + 1] = m.frac;
         motes[o + 2] = 1;
-        motes[o + 3] = k * 7 + moteSlot;
+        motes[o + 3] = ring.phi; // pattern space: motes rotate with the ring
         moteSlot++;
       }
     }

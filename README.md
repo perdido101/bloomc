@@ -1,10 +1,10 @@
 # BLOOM
 
-A high-score endless maze-platformer played inside a living kaleidoscope.
-You are a comet wisp descending toward the eye of an ever-blooming mandala
-vortex — the only asymmetric thing on screen. Every ring is a rotating wall
-with one or two doorways; solid rings bounce your jumps back, so descending
-means reading the rotation and slipping through the aligned door.
+A high-score endless runner flown through a living kaleidoscope. You are a
+luminous moth drawn to the light at the heart of an ever-blooming mandala
+vortex. Rings rush at you, each a rotating wall with one or two doorways —
+steer around the tunnel to thread them as the pace climbs and the world
+Blooms into new patterns around you.
 
 ## Play
 
@@ -15,34 +15,36 @@ npm run build     # production build → dist/
 npm test          # deterministic physics/scoring tests
 ```
 
-### Controls — one thumb, no zones
+### Controls — Subway-Surfers fluid, one thumb
 
-You are a comet wisp that **runs along the rings by itself**.
+You fly forward on your own; steering rotates the tunnel around you (the
+moth stays pinned at the bottom of the screen, so left/right always means
+left/right).
 
 | Action | Touch | Desktop |
 | --- | --- | --- |
-| Jump (inward) | tap anywhere | Space / W / ↑ |
-| Flip run direction | swipe left / right | A/D or ←/→ |
-| Flash-dash | swipe up | Shift |
+| Steer | drag left / right | hold ←/→ or A/D |
+| Lane hop | quick flick | — |
+| Jump (clears THIN walls) | tap | Space / W |
+| Dash (smashes one wall, cooldown) | swipe up | Shift |
+| Brake (line up a door) | swipe down | S / ↓ |
 | Pause | ◈ glyph, top right | Esc |
 
-Gravity pulls **outward**. Each ring is a near-solid wall with 1–2
-doorways (mirrored by the kaleidoscope): jump inward **through a door** —
-solid undersides bounce you back. Doors are also holes under your feet, so
-mind the drop; falling off the outermost ring ends the run. A jump that
-barely misses a door edge **grabs it** and pulls you up.
-Skim a ring (land and leave within 0.5 s) to build your combo (up to ×8).
+Each ring is a near-solid wall with 1–2 doorways (mirrored by the
+kaleidoscope): fly through a door or crash. THIN walls can be jumped;
+spike guards narrow some doorways; razor petals patrol deeper rings. An
+aim assist eases you into doors that are almost lined up. Passing doors
+builds your combo (up to ×8); grazing a door's edge pays style points;
+glowing motes ride the rings marking their doorways — collect for
+25 × combo.
 
 The world **Blooms** on an accelerating schedule (45 s shrinking to 18 s):
 every Bloom rolls a fresh procedural **PhaseDNA** — cosine-gradient
-palette spanning the full color wheel (live hue drift, genomes morph
-across transitions), mirror count 5–16 with spiral twist, noise type,
-texture blend mode, platform/hazard shape language, ring layout rhythm.
-No two Blooms ever look alike; a per-tier visual-load budget and a
-contrast-verified hazard color keep it readable. Surviving one is worth
-+500 × blooms survived. Every 2 Blooms unlocks a **surrealism tier**
-(shockwave, +1000, whispered title) with new visual permissions, up to
-DEEP VORTEX rule-breakers; every 3rd Bloom is a serene Lull breather.
+palette spanning the full color wheel, mirror count 5–16 with spiral
+twist, noise type, texture blend mode, wall shapes, ring rhythm — and the
+pace climbs. Surviving one is worth +500 × blooms. Every 2 Blooms unlocks
+a **surrealism tier** (shockwave, +1000, whispered title), up to DEEP
+VORTEX rule-breakers; every 3rd Bloom is a serene Lull breather.
 
 Runs are seeded and replayable: the game-over screen shows the seed, and
 `?seed=<seed>` in the URL replays that world. Visual DNA rolls from a
@@ -75,9 +77,9 @@ DNA as JSON.
   rule-breakers). Palettes are IQ cosine gradients evaluated to a LUT on
   the CPU each frame (`render/palette.ts`) with enforced luminance bounds
   and a ≥3:1 hazard/platform contrast invariant.
-- The comet wisp avatar is layered light shapes (dark backdrop teardrop,
-  palette halo, white streak + hot core) that stretch with motion, squash
-  on landings and bounces, and cling during ledge grabs.
+- The moth avatar is layered light shapes (dark silhouette, palette wing
+  glows, white body + hot core): wings beat faster with speed, fold back
+  on dashes, flare on jumps; the hue-shifting ribbon trails as wing dust.
 
 ## Textures (placeholder system)
 

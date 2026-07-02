@@ -1,32 +1,39 @@
 import { TUNING } from './difficulty';
-import {
-  RingField,
-  SAMPLE_HAZARD,
-  SAMPLE_NONE,
-  SAMPLE_PLATFORM,
-} from './rings';
+import { RingField, SAMPLE_HAZARD, SAMPLE_NONE } from './rings';
 
 /* ------------------------------------------------------------------ */
-/*  Input — mobile-first, one thumb, no zones to learn:                 */
-/*    tap anywhere      = jump                                          */
-/*    swipe left/right  = flip run direction                            */
-/*    swipe up          = flash-dash                                    */
-/*  Desktop: Space/W/↑ jump · A/D or ←/→ set direction · Shift dash.    */
+/*  Input — endless-runner gestures, one thumb:                         */
+/*    drag left/right   = steer (rotate the tunnel, 1:1 under finger)   */
+/*    quick flick ⇄     = lane hop (eased impulse)                      */
+/*    tap               = jump (passes over LOW rings)                  */
+/*    swipe up          = dash (burst + smash through one wall)         */
+/*    swipe down        = brake (brief slow to line up a door)          */
+/*  Desktop: hold ←/→ or A/D steer · Space jump · Shift dash · S brake. */
 /* ------------------------------------------------------------------ */
 
 export class Input {
-  /** run direction in screen terms: +1 = clockwise, -1 = counter-clockwise */
-  runDir = 1;
+  /** -1..1 keyboard steering */
+  steerAxis = 0;
   onPause: (() => void) | null = null;
   onAnyInput: (() => void) | null = null;
 
-  private jumpPressedAt = -Infinity;
-  private dashPressedAt = -Infinity;
-  private touches = new Map<number, { x: number; y: number; t: number }>();
+  private left = false;
+  private right = false;
+  private jumpAt = -Infinity;
+  private dashAt = -Infinity;
+  private brakeAt = -Infinity;
+  private dragPx = 0;      // accumulated horizontal drag since last consume
+  private hopQueued = 0;   // -1 | 0 | +1
+  private touches = new Map<
+    number,
+    { x: number; y: number; lx: number; t: number; moved: number }
+  >();
 
   constructor(el: HTMLElement) {
     window.addEventListener('keydown', this.onKeyDown);
+    window.addEventListener('keyup', this.onKeyUp);
     el.addEventListener('pointerdown', this.onPointerDown);
+    el.addEventListener('pointermove', this.onPointerMove);
     el.addEventListener('pointerup', this.onPointerUp);
     el.addEventListener('pointercancel', this.onPointerCancel);
     el.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -38,52 +45,88 @@ export class Input {
     switch (e.code) {
       case 'ArrowLeft':
       case 'KeyA':
-        this.runDir = -1;
+        this.left = true;
         break;
       case 'ArrowRight':
       case 'KeyD':
-        this.runDir = 1;
+        this.right = true;
         break;
       case 'Space':
       case 'ArrowUp':
       case 'KeyW':
-        this.jumpPressedAt = performance.now();
+        this.jumpAt = performance.now();
         e.preventDefault();
         break;
       case 'ShiftLeft':
       case 'ShiftRight':
-        this.dashPressedAt = performance.now();
+        this.dashAt = performance.now();
+        break;
+      case 'ArrowDown':
+      case 'KeyS':
+        this.brakeAt = performance.now();
         break;
       case 'Escape':
         this.onPause?.();
         break;
     }
+    this.steerAxis = (this.right ? 1 : 0) - (this.left ? 1 : 0);
+  };
+
+  private onKeyUp = (e: KeyboardEvent): void => {
+    switch (e.code) {
+      case 'ArrowLeft':
+      case 'KeyA':
+        this.left = false;
+        break;
+      case 'ArrowRight':
+      case 'KeyD':
+        this.right = false;
+        break;
+    }
+    this.steerAxis = (this.right ? 1 : 0) - (this.left ? 1 : 0);
   };
 
   private onPointerDown = (e: PointerEvent): void => {
     this.onAnyInput?.();
-    this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now() });
+    this.touches.set(e.pointerId, {
+      x: e.clientX,
+      y: e.clientY,
+      lx: e.clientX,
+      t: performance.now(),
+      moved: 0,
+    });
+  };
+
+  private onPointerMove = (e: PointerEvent): void => {
+    const t = this.touches.get(e.pointerId);
+    if (!t) return;
+    const dx = e.clientX - t.lx;
+    t.lx = e.clientX;
+    t.moved = Math.max(t.moved, Math.hypot(e.clientX - t.x, e.clientY - t.y));
+    this.dragPx += dx;
   };
 
   private onPointerUp = (e: PointerEvent): void => {
-    const start = this.touches.get(e.pointerId);
+    const t = this.touches.get(e.pointerId);
     this.touches.delete(e.pointerId);
-    if (!start) return;
-    const dx = e.clientX - start.x;
-    const dy = e.clientY - start.y;
-    const dt = performance.now() - start.t;
-    const dist = Math.hypot(dx, dy);
+    if (!t) return;
+    const dx = e.clientX - t.x;
+    const dy = e.clientY - t.y;
+    const dt = performance.now() - t.t;
+    const now = performance.now();
 
-    if (dist <= TUNING.TAP_SLOP_PX && dt <= TUNING.TAP_MAX_MS) {
-      this.jumpPressedAt = performance.now();
+    if (t.moved <= TUNING.TAP_SLOP_PX && dt <= TUNING.TAP_MAX_MS) {
+      this.jumpAt = now; // tap = jump
       return;
     }
-    if (dist < TUNING.SWIPE_MIN_PX) return;
-    if (Math.abs(dy) > Math.abs(dx)) {
-      if (dy < 0) this.dashPressedAt = performance.now(); // swipe up
-      // swipe down: ignored (reserved)
-    } else {
-      this.runDir = dx > 0 ? 1 : -1;
+    if (Math.abs(dy) > Math.abs(dx) * 1.4 && Math.abs(dy) >= TUNING.SWIPE_V_MIN_PX) {
+      if (dy < 0) this.dashAt = now;
+      else this.brakeAt = now;
+      return;
+    }
+    // fast horizontal flick = lane hop (in addition to the drag already applied)
+    if (Math.abs(dx) >= TUNING.FLICK_MIN_PX && dt <= TUNING.FLICK_MAX_MS) {
+      this.hopQueued = dx > 0 ? 1 : -1;
     }
   };
 
@@ -91,94 +134,98 @@ export class Input {
     this.touches.delete(e.pointerId);
   };
 
-  /** jump requested within the input buffer window? */
+  /** accumulated finger drag since last frame, in px (consumed) */
+  consumeDragPx(): number {
+    const d = this.dragPx;
+    this.dragPx = 0;
+    return d;
+  }
+
+  consumeHop(): number {
+    const h = this.hopQueued;
+    this.hopQueued = 0;
+    return h;
+  }
+
   jumpBuffered(): boolean {
-    return performance.now() - this.jumpPressedAt <= TUNING.BUFFER_MS;
+    return performance.now() - this.jumpAt <= TUNING.JUMP_BUFFER_MS;
   }
 
   consumeJump(): void {
-    this.jumpPressedAt = -Infinity;
+    this.jumpAt = -Infinity;
   }
 
   dashQueued(): boolean {
-    return performance.now() - this.dashPressedAt <= 150;
+    return performance.now() - this.dashAt <= 150;
   }
 
   consumeDash(): void {
-    this.dashPressedAt = -Infinity;
+    this.dashAt = -Infinity;
+  }
+
+  brakeQueued(): boolean {
+    return performance.now() - this.brakeAt <= 150;
+  }
+
+  consumeBrake(): void {
+    this.brakeAt = -Infinity;
   }
 
   clear(): void {
-    this.jumpPressedAt = -Infinity;
-    this.dashPressedAt = -Infinity;
+    this.jumpAt = this.dashAt = this.brakeAt = -Infinity;
+    this.dragPx = 0;
+    this.hopQueued = 0;
     this.touches.clear();
   }
 }
 
 /* ------------------------------------------------------------------ */
-/*  The Climber: polar physics with auto-run and ledge grabs            */
+/*  The Runner: you fly forward; rings rush at you; thread the doors.   */
 /* ------------------------------------------------------------------ */
 
-export interface ShardEvents {
+export type CrashCause = 'wall' | 'hazard';
+
+export interface RunnerEvents {
+  /** passed ring k; viaDoor=false means jumped over or dashed through */
+  onPass?: (k: number, viaDoor: boolean, graze: boolean) => void;
   onJump?: () => void;
   onDash?: () => void;
-  onLand?: (ring: number) => void;
-  /** hit the solid underside of a ring while jumping inward */
-  onBounce?: (ring: number) => void;
-  /** grabbed a ledge and is pulling up onto ring k */
-  onGrab?: (ring: number) => void;
-  /** left a ring after standing standDur seconds (skim if < window) */
-  onLeave?: (standDur: number) => void;
+  onBrake?: () => void;
   onMote?: (count: number) => void;
-  onDie?: (cause: 'fall' | 'hazard') => void;
+  onDie?: (cause: CrashCause) => void;
 }
 
-export class Shard {
-  /** radial position, world units; larger = deeper (toward the eye) */
-  depth = 0;
-  /** radial velocity; positive = inward */
-  vel = 0;
+export class Runner {
+  /** forward flight depth, world units */
+  z = 0;
   theta = 0;
-  /** inherited angular velocity while airborne, rad/s */
-  angVel = 0;
-  /** eased auto-run velocity, rad/s (world theta terms) */
-  moveVel = 0;
-  onRing = true;
-  ringK = 0;
-  standTime = 0;
+  steerVel = 0;
+  /** airborne window remaining (passes over LOW rings) */
+  jumpT = 0;
+  dashT = 0;
+  dashCd = 0;
+  brakeT = 0;
+  brakeCd = 0;
   alive = true;
-  dashUsed = false;
-  intangibleT = 0;
-  /** 0..1 while pulling up onto a ledge; <0 when not grabbing */
-  grabT = -1;
-  /** total tangential angular velocity this frame (for the animator) */
+  /** last ring plane passed */
+  ringK = 0;
+  /** current forward speed (for the animator/trail) */
+  speed = 0;
+  /** total steering rate this frame (for the animator) */
   tangentOmega = 0;
-  /** escalation compensation (set by the game per tier) */
-  jumpBoost = 1;
-  coyoteMs: number = TUNING.COYOTE_MS;
-  private grabRing = 0;
-  private grabFromTheta = 0;
-  private grabToTheta = 0;
-  private coyoteT = 0;
 
   reset(): void {
-    this.depth = 0;
-    this.vel = 0;
+    this.z = -TUNING.RING_SPACING * 0.5; // half a spacing of runway
     this.theta = Math.random() * Math.PI * 2;
-    this.angVel = 0;
-    this.moveVel = 0;
-    this.onRing = true;
-    this.ringK = 0;
-    this.standTime = 0;
+    this.steerVel = 0;
+    this.jumpT = 0;
+    this.dashT = 0;
+    this.dashCd = 0;
+    this.brakeT = 0;
+    this.brakeCd = 0;
     this.alive = true;
-    this.dashUsed = false;
-    this.intangibleT = 0;
-    this.grabT = -1;
-    this.coyoteT = 0;
-  }
-
-  get grabbing(): boolean {
-    return this.grabT >= 0;
+    this.ringK = 0;
+    this.speed = 0;
   }
 
   update(
@@ -186,177 +233,102 @@ export class Shard {
     input: Input,
     field: RingField,
     wedge: number,
-    ringSpeedMul: number,
-    ev: ShardEvents,
+    forwardSpeed: number,
+    ev: RunnerEvents,
     twist = 0
   ): void {
     if (!this.alive || dt <= 0) return;
     const S = TUNING.RING_SPACING;
-    this.intangibleT = Math.max(0, this.intangibleT - dt);
-    this.coyoteT = Math.max(0, this.coyoteT - dt);
+    this.jumpT = Math.max(0, this.jumpT - dt);
+    this.dashT = Math.max(0, this.dashT - dt);
+    this.dashCd = Math.max(0, this.dashCd - dt);
+    this.brakeT = Math.max(0, this.brakeT - dt);
+    this.brakeCd = Math.max(0, this.brakeCd - dt);
 
-    // --- ledge pull-up: scripted, then stand ---
-    if (this.grabbing) {
-      this.tangentOmega = (this.grabToTheta - this.grabFromTheta) / TUNING.GRAB_PULL_S;
-      this.grabT += dt / TUNING.GRAB_PULL_S;
-      const t = Math.min(1, this.grabT);
-      const e = t * t * (3 - 2 * t);
-      this.theta = this.grabFromTheta + (this.grabToTheta - this.grabFromTheta) * e;
-      this.depth = this.grabRing * S - (1 - e) * 1.4; // hangs just below, pulls up
-      if (this.grabT >= 1) {
-        this.grabT = -1;
-        this.land(this.grabRing, ev);
-      }
-      return;
-    }
+    // --- steering: drag is 1:1 under the finger; flicks add momentum ---
+    const drag = input.consumeDragPx() * TUNING.DRAG_RAD_PER_PX;
+    const hop = input.consumeHop();
+    if (hop !== 0) this.steerVel += hop * TUNING.HOP_IMPULSE;
+    this.steerVel += input.steerAxis * TUNING.STEER_KEY_SPEED * dt * 10;
+    const maxSteer = TUNING.STEER_KEY_SPEED * 1.6;
+    if (this.steerVel > maxSteer) this.steerVel = maxSteer;
+    if (this.steerVel < -maxSteer) this.steerVel = -maxSteer;
+    this.theta += drag + this.steerVel * dt;
+    this.steerVel *= Math.exp(-TUNING.STEER_DAMP * dt);
+    this.tangentOmega = this.steerVel + (dt > 0 ? drag / dt : 0);
 
-    const ring = field.rings.get(this.ringK);
-    const ringOmega = ring ? ring.omega * field.dirFlip * ringSpeedMul : 0;
-    // auto-run: screen-clockwise = negative theta
-    const dirTheta = -input.runDir;
-    const runSpeed = Math.max(TUNING.RUN_SPEED_MIN, Math.abs(ringOmega) * TUNING.RUN_SPEED_REL);
-
-    // --- tangential motion ---
-    if (this.onRing) {
-      const target = dirTheta * runSpeed;
-      const rate = runSpeed / TUNING.MOVE_EASE_S;
-      this.moveVel = approach(this.moveVel, target, rate * dt);
-      this.tangentOmega = ringOmega + this.moveVel;
-      this.theta += this.tangentOmega * dt;
-    } else {
-      const target = dirTheta * TUNING.AIR_DRIFT;
-      this.moveVel = approach(this.moveVel, target, (TUNING.AIR_DRIFT / TUNING.MOVE_EASE_S) * dt);
-      this.tangentOmega = this.angVel + this.moveVel;
-      this.theta += this.tangentOmega * dt;
-    }
-
-    // --- standing support / hazards ---
-    if (this.onRing) {
-      this.standTime += dt;
-      const s = field.sample(this.ringK, this.theta, wedge, twist);
-      if (s === SAMPLE_HAZARD && this.intangibleT <= 0) {
-        this.die('hazard', ev);
-        return;
-      }
-      if (s === SAMPLE_NONE) {
-        // ran off the edge: start falling, grant coyote time
-        this.onRing = false;
-        this.vel = 0;
-        this.angVel = ringOmega + this.moveVel;
-        this.coyoteT = this.coyoteMs / 1000;
-        ev.onLeave?.(this.standTime);
-      }
-    }
-
-    // --- jump (with input buffer + coyote time) ---
-    if (input.jumpBuffered() && (this.onRing || this.coyoteT > 0)) {
+    // --- moves ---
+    if (input.jumpBuffered()) {
       input.consumeJump();
-      if (this.onRing) {
-        ev.onLeave?.(this.standTime);
-        this.angVel = ringOmega + this.moveVel;
-      }
-      this.onRing = false;
-      this.coyoteT = 0;
-      this.vel = TUNING.JUMP_IMPULSE * this.jumpBoost;
-      this.dashUsed = false;
+      this.jumpT = TUNING.JUMP_WINDOW_S;
       ev.onJump?.();
     }
-
-    // --- flash-dash: one per airtime, refreshed on landing ---
-    if (!this.onRing && !this.dashUsed && input.dashQueued()) {
+    if (input.dashQueued() && this.dashCd <= 0) {
       input.consumeDash();
-      this.dashUsed = true;
-      this.vel = Math.max(this.vel * 0.35, 0) + TUNING.DASH_IMPULSE;
-      this.intangibleT = TUNING.DASH_INTANGIBLE_S;
+      this.dashT = TUNING.DASH_DUR_S;
+      this.dashCd = TUNING.DASH_CD_S;
       ev.onDash?.();
     }
+    if (input.brakeQueued() && this.brakeCd <= 0) {
+      input.consumeBrake();
+      this.brakeT = TUNING.BRAKE_DUR_S;
+      this.brakeCd = TUNING.BRAKE_CD_S;
+      ev.onBrake?.();
+    }
 
-    // --- radial integration + ring-plane crossings ---
-    if (!this.onRing) {
-      this.vel -= TUNING.GRAVITY_OUT * dt;
-      const prev = this.depth;
-      this.depth += this.vel * dt;
+    // --- forward flight ---
+    let v = forwardSpeed;
+    if (this.dashT > 0) v *= TUNING.DASH_SPEED_MUL;
+    if (this.brakeT > 0) v *= TUNING.BRAKE_SPEED_MUL;
+    this.speed = v;
+    const prev = this.z;
+    this.z += v * dt;
 
-      if (this.vel > 0) {
-        // rising inward: solid ring undersides block — only doors let you
-        // through. This is the maze.
-        const loK = Math.ceil(prev / S + 1e-6);
-        const hiK = Math.floor(this.depth / S);
-        for (let k = Math.max(1, loK); k <= hiK; k++) {
-          if (!field.rings.has(k)) continue;
-          const sUp = field.sample(k, this.theta, wedge, twist);
-          if (sUp !== SAMPLE_NONE) {
-            this.depth = k * S - 0.05;
-            this.vel = -this.vel * TUNING.BOUNCE_RESTITUTION;
-            ev.onBounce?.(k);
-            break;
-          }
-        }
+    // --- aim assist: near a crossing, ease toward a close-by door ---
+    const nextPlane = (Math.floor(prev / S) + 1) * S;
+    if (nextPlane - this.z < v * 0.3 && field.rings.has(Math.round(nextPlane / S))) {
+      const k = Math.round(nextPlane / S);
+      const da = field.doorDelta(k, this.theta, wedge, twist);
+      if (da !== null && Math.abs(da) <= TUNING.ASSIST_RANGE && da !== 0) {
+        const pull = Math.sign(da) * Math.min(Math.abs(da), TUNING.ASSIST_RATE * dt);
+        this.theta += pull;
       }
+    }
 
-      if (this.vel < 0) {
-        // falling outward: test each ring plane crossed this frame
-        const hiK = Math.floor(prev / S);
-        const loK = Math.ceil(this.depth / S);
-        for (let k = hiK; k >= loK; k--) {
-          if (k < 0) break;
-          const plane = k * S;
-          if (prev < plane || this.depth > plane) continue;
-          const s = field.sample(k, this.theta, wedge, twist);
-          if (s === SAMPLE_HAZARD && this.intangibleT <= 0) {
-            this.die('hazard', ev);
-            return;
-          }
-          if (s === SAMPLE_PLATFORM) {
-            this.land(k, ev);
-            break;
-          }
-          // just missed: the climber catches the ledge and pulls up
-          const dTheta = field.grabEdge(k, this.theta, wedge, twist);
-          if (dTheta !== null) {
-            this.grabT = 0;
-            this.grabRing = k;
-            this.grabFromTheta = this.theta;
-            this.grabToTheta = this.theta + dTheta;
-            this.vel = 0;
-            this.depth = plane - 1.4;
-            this.moveVel = 0;
-            ev.onGrab?.(k);
-            return;
-          }
-        }
+    // --- ring crossings ---
+    const loK = Math.floor(prev / S) + 1;
+    const hiK = Math.floor(this.z / S);
+    for (let k = Math.max(1, loK); k <= hiK; k++) {
+      const ring = field.rings.get(k);
+      if (!ring) {
+        this.ringK = k;
+        continue;
       }
-
-      // fell past the outermost ring of the window: death
-      if (!this.onRing && this.depth < (field.minDepth * S) - 2) {
-        this.die('fall', ev);
+      const s = field.sample(k, this.theta, wedge, twist);
+      if (s === SAMPLE_NONE) {
+        // clean pass through a doorway; grazing the edge is style
+        const edge = field.doorEdgeDist(k, this.theta, wedge, twist);
+        const graze = edge !== null && edge <= TUNING.GRAZE_RAD;
+        ev.onPass?.(k, true, graze);
+      } else if (ring.low && this.jumpT > 0) {
+        ev.onPass?.(k, false, false); // leapt over a low wall
+      } else if (this.dashT > 0) {
+        this.dashT = 0; // dash smashes through exactly one obstacle
+        ev.onPass?.(k, false, false);
+      } else if (s === SAMPLE_HAZARD) {
+        this.alive = false;
+        ev.onDie?.('hazard');
+        return;
+      } else {
+        this.alive = false;
+        ev.onDie?.('wall');
         return;
       }
+      this.ringK = k;
     }
 
     // --- motes ---
-    const collected = field.collectMotes(this.depth, this.theta, wedge, twist);
+    const collected = field.collectMotes(this.z, this.theta, wedge, twist);
     if (collected > 0) ev.onMote?.(collected);
   }
-
-  private land(k: number, ev: ShardEvents): void {
-    this.onRing = true;
-    this.ringK = k;
-    this.depth = k * TUNING.RING_SPACING;
-    this.vel = 0;
-    this.standTime = 0;
-    this.dashUsed = false;
-    this.moveVel = 0;
-    ev.onLand?.(k);
-  }
-
-  private die(cause: 'fall' | 'hazard', ev: ShardEvents): void {
-    this.alive = false;
-    ev.onDie?.(cause);
-  }
-}
-
-function approach(v: number, target: number, maxDelta: number): number {
-  if (v < target) return Math.min(target, v + maxDelta);
-  return Math.max(target, v - maxDelta);
 }

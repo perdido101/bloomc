@@ -31,31 +31,24 @@ export class Scoring {
     this.maxLanded = 0;
   }
 
-  /** returns rings gained (for feedback) */
-  onLand(ring: number): number {
+  /** passed ring k. Door passes build the combo; jump/dash passes keep it. */
+  onPass(ring: number, viaDoor: boolean): void {
     if (ring > this.maxLanded) {
-      const gained = ring - this.maxLanded;
       this.maxLanded = ring;
       this.deepestRing = ring;
-      this.score += gained * TUNING.DEPTH_SCORE;
-      return gained;
+      this.score += TUNING.DEPTH_SCORE;
     }
-    return 0;
-  }
-
-  /** returns true if this leave was a skim (combo went up) */
-  onLeave(standDur: number): boolean {
-    if (standDur <= TUNING.SKIM_WINDOW_S) {
+    if (viaDoor) {
       this.combo = Math.min(TUNING.COMBO_MAX, this.combo + 1);
       this.bestCombo = Math.max(this.bestCombo, this.combo);
-      return true;
     }
-    return false;
   }
 
-  /** call each frame while the player stands on a ring */
-  onStanding(standTime: number): void {
-    if (standTime > TUNING.COMBO_RESET_S) this.combo = 1;
+  /** grazed a doorway edge — style points ×combo */
+  onGraze(): number {
+    const pts = 15 * this.combo;
+    this.score += pts;
+    return pts;
   }
 
   onMote(count: number): number {

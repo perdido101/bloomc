@@ -97,6 +97,8 @@ export interface Ring {
   arcs: Arc[];
   petals: Petal[];
   motes: Mote[];
+  /** low wall: can be jumped over instead of steering through the door */
+  low: boolean;
 }
 
 export const SAMPLE_NONE = 0;
@@ -194,28 +196,25 @@ export class RingField {
     }
     if (cursor < 0.99) normArcs.push({ s: cursor, e: 1, hazard: false });
 
-    // --- hazards: crystal spikes claim an edge slice of a platform arc ---
+    // --- hazards: spike guards INSIDE a doorway (narrow the safe opening) ---
     const hazardChance = Math.min(
       TUNING.HAZARD_CHANCE_MAX,
       TUNING.HAZARD_CHANCE_START + TUNING.HAZARD_CHANCE_PER_DEPTH * k
     ) * gen.hazardDensity * (0.7 + 0.3 * intensity);
-    if (k >= 4 && rng.next() < hazardChance && normArcs.length > 0) {
-      // a spike bed guarding one side of a doorway
-      const idx = Math.floor(rng.next() * normArcs.length);
-      const a = normArcs[idx];
-      const width = a.e - a.s;
-      const hw = Math.min(width * 0.3, Math.max(0.04, wf * 0.6));
-      if (width > hw * 2.5) {
-        const atStart = rng.next() < 0.5;
-        if (atStart) {
-          normArcs.push({ s: a.s, e: a.s + hw, hazard: true });
-          a.s += hw;
-        } else {
-          normArcs.push({ s: a.e - hw, e: a.e, hazard: true });
-          a.e -= hw;
-        }
-      }
+    if (k >= 6 && rng.next() < hazardChance) {
+      const d = doors[Math.floor(rng.next() * doors.length)];
+      const gw = wf * rng.range(0.22, 0.34);
+      const side = rng.next() < 0.5 ? -1 : 1;
+      const edge = d + (side * wf) / 2;
+      normArcs.push(
+        side < 0
+          ? { s: edge, e: edge + gw, hazard: true }
+          : { s: edge - gw, e: edge, hazard: true }
+      );
     }
+
+    // low walls: jumpable — the runner's hurdles
+    const low = k >= 4 && rng.next() < TUNING.LOW_RING_CHANCE;
 
     // --- razor petals: orbiting hazards, deeper only ---
     const petals: Petal[] = [];
@@ -230,17 +229,17 @@ export class RingField {
       });
     }
 
-    // --- prisma motes: 0–2 per wedge, floating above the ring ---
+    // --- prisma motes: ride the ring just ahead of its doorways — a coin
+    // trail that literally points you at the opening ---
     const motes: Mote[] = [];
     if (k >= 1) {
-      const roll = rng.next();
-      const n = roll < 0.45 ? 0 : roll < 0.85 ? 1 : 2;
-      for (let i = 0; i < n; i++) {
-        motes.push({ frac: rng.next(), taken: false });
+      for (const d of doors) {
+        if (rng.next() < 0.65) motes.push({ frac: d, taken: false });
       }
+      if (rng.next() < 0.2) motes.push({ frac: rng.next(), taken: false });
     }
 
-    return { depth: k, omega, phi, arcs: normArcs, petals, motes };
+    return { depth: k, omega, phi, arcs: normArcs, petals, motes, low };
   }
 
   update(dt: number, speedMul: number): void {
@@ -280,65 +279,6 @@ export class RingField {
     return SAMPLE_NONE;
   }
 
-  /** a world angle standing on solid floor of ring k (for spawning) */
-  findSolid(k: number, wedge: number, twist = 0): number {
-    for (const margin of [0.12, 0.05, 0]) {
-      for (let i = 0; i < 128; i++) {
-        const th = (i / 128) * TWO_PI + 0.013;
-        if (
-          this.sample(k, th, wedge, twist) === SAMPLE_PLATFORM &&
-          (margin === 0 ||
-            (this.sample(k, th + margin, wedge, twist) === SAMPLE_PLATFORM &&
-              this.sample(k, th - margin, wedge, twist) === SAMPLE_PLATFORM))
-        ) {
-          return th;
-        }
-      }
-    }
-    return 0;
-  }
-
-  /**
-   * Ledge grab (climber forgiveness): when a fall just misses a platform,
-   * find the nearest non-hazard arc edge within GRAB_RANGE_ANG and return
-   * the world-angle delta that pulls the climber onto it. Uses the same
-   * double-fold as sample(); the fold slope is probed numerically so the
-   * correction is applied in the right world direction.
-   */
-  grabEdge(k: number, worldTheta: number, wedge: number, twist = 0): number | null {
-    const ring = this.rings.get(k);
-    if (!ring) return null;
-    const fOf = (th: number) => foldAngle(twistFold(th, wedge, twist) - ring.phi, wedge) / wedge;
-    const f = fOf(worldTheta);
-    const range = TUNING.GRAB_RANGE_ANG / wedge;
-    const inset = TUNING.GRAB_INSET_FRAC + TUNING.PLAYER_HALF_ANG / wedge;
-
-    let bestDist = Infinity;
-    let bestTarget = 0;
-    for (const arc of ring.arcs) {
-      if (arc.hazard) continue;
-      if (arc.e - arc.s < inset * 2.5) continue; // too small to pull onto
-      if (f < arc.s && arc.s - f <= range && arc.s - f < bestDist) {
-        bestDist = arc.s - f;
-        bestTarget = arc.s + inset;
-      } else if (f > arc.e && f - arc.e <= range && f - arc.e < bestDist) {
-        bestDist = f - arc.e;
-        bestTarget = arc.e - inset;
-      }
-    }
-    if (!isFinite(bestDist)) return null;
-
-    // probe the fold slope: df/dθ is ±1/wedge piecewise
-    const h = 1e-3;
-    const slope = (fOf(worldTheta + h) - f) / h;
-    if (Math.abs(slope) < 1e-6) return null; // sitting on a fold crease
-    const dTheta = (bestTarget - f) / slope;
-    if (Math.abs(dTheta) > TUNING.GRAB_RANGE_ANG * 2.5) return null;
-    // verify the destination really is standable (fold may kink in between)
-    if (this.sample(k, worldTheta + dTheta, wedge, twist) !== SAMPLE_PLATFORM) return null;
-    return dTheta;
-  }
-
   /**
    * Collect motes near the player. Motes float half a spacing above
    * (inward of) their ring plane. Returns number collected.
@@ -347,9 +287,10 @@ export class RingField {
     let n = 0;
     for (const ring of this.rings.values()) {
       if (ring.motes.length === 0) continue;
-      const moteDepth = (ring.depth + 0.55) * TUNING.RING_SPACING;
+      const moteDepth = (ring.depth - 0.45) * TUNING.RING_SPACING;
       if (Math.abs(playerDepth - moteDepth) > TUNING.MOTE_RADIAL_TOL) continue;
-      const f = twistFold(worldTheta, wedge, twist) / wedge;
+      // pattern space: motes rotate WITH their ring, marking its doors
+      const f = foldAngle(twistFold(worldTheta, wedge, twist) - ring.phi, wedge) / wedge;
       for (const m of ring.motes) {
         if (m.taken) continue;
         if (fracDist(f, m.frac) < TUNING.MOTE_ANG_TOL) {
@@ -360,6 +301,57 @@ export class RingField {
     }
     return n;
   }
+
+  /**
+   * Signed world-angle delta from worldTheta to the nearest open doorway
+   * center of ring k (0 if already inside one, null if none nearby).
+   * Drives the aim assist.
+   */
+  doorDelta(k: number, worldTheta: number, wedge: number, twist = 0): number | null {
+    const ring = this.rings.get(k);
+    if (!ring) return null;
+    const fOf = (th: number) =>
+      foldAngle(twistFold(th, wedge, twist) - ring.phi, wedge) / wedge;
+    const f = fOf(worldTheta);
+    if (this.sample(k, worldTheta, wedge, twist) === SAMPLE_NONE) return 0;
+
+    // gap centers = midpoints of the complement of all arcs
+    let best = Infinity;
+    let target = 0;
+    const gaps = gapsOf(ring.arcs);
+    for (const g of gaps) {
+      const c = (g.s + g.e) / 2;
+      // reflected images of c under the fold
+      for (const t of [c, -c, 2 - c]) {
+        const d = Math.abs(t - f);
+        if (d < best) {
+          best = d;
+          target = t;
+        }
+      }
+    }
+    if (!isFinite(best)) return null;
+    const h = 1e-3;
+    const slope = (fOf(worldTheta + h) - f) / h;
+    if (Math.abs(slope) < 1e-6) return null;
+    const dTheta = (target - f) / slope;
+    // the fold is only piecewise-linear: verify the landing spot really is
+    // open, else skip this frame (the assist recomputes continuously)
+    if (this.sample(k, worldTheta + dTheta, wedge, twist) !== SAMPLE_NONE) return null;
+    return dTheta;
+  }
+
+  /** distance (world rad) to the nearest wall edge while inside a doorway */
+  doorEdgeDist(k: number, worldTheta: number, wedge: number, twist = 0): number | null {
+    const ring = this.rings.get(k);
+    if (!ring) return null;
+    const f = foldAngle(twistFold(worldTheta, wedge, twist) - ring.phi, wedge) / wedge;
+    let best = Infinity;
+    for (const a of ring.arcs) {
+      best = Math.min(best, Math.abs(f - a.s), Math.abs(f - a.e));
+    }
+    return isFinite(best) ? best * wedge : null;
+  }
 }
 
 /**
@@ -368,4 +360,17 @@ export class RingField {
  */
 export function fracDist(a: number, b: number): number {
   return Math.min(Math.abs(a - b), a + b, 2 - a - b);
+}
+
+/** complement of the (sorted-on-demand) arcs in [0,1) — the doorways */
+function gapsOf(arcs: Arc[]): Array<{ s: number; e: number }> {
+  const sorted = [...arcs].sort((x, y) => x.s - y.s);
+  const gaps: Array<{ s: number; e: number }> = [];
+  let cursor = 0;
+  for (const a of sorted) {
+    if (a.s > cursor + 0.005) gaps.push({ s: cursor, e: a.s });
+    cursor = Math.max(cursor, a.e);
+  }
+  if (cursor < 0.995) gaps.push({ s: cursor, e: 1 });
+  return gaps;
 }

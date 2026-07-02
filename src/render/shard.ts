@@ -3,11 +3,11 @@ import { TUNING } from '../game/difficulty';
 import { es300 } from './gfx';
 
 /**
- * The Comet Wisp: a bright teardrop of light — molten white core, palette
- * halo, dark backdrop disc for readability over bright rings, and the
- * signature hue-shifting ribbon tail. It stretches along its motion when
- * flying, doubles its stretch on a dash, squashes on landings, and clings
- * tight during ledge grabs. Simple shapes that always read at phone size.
+ * The Moth: a luminous moth drawn to the light at the tunnel's heart.
+ * Molten white body, palette-tinted wing glows that beat faster with
+ * speed, fold back on a dash, flare wide on a jump; a dark backdrop
+ * silhouette keeps it readable over bright rings, and the hue-shifting
+ * ribbon tail streams behind as wing dust.
  * All buffers pre-allocated; per-frame updates write in place.
  */
 
@@ -98,8 +98,8 @@ function hueToRgb(h: number, out: Float32Array, o: number, sat: number, val: num
   out[o + 2] = b;
 }
 
-// body quads: dark backdrop teardrop + halo + body streak + core + hot pip
-const N_QUADS = 5;
+// dark silhouette (body + 2 wings) + glow (4 wings, body, core, pip)
+const N_QUADS = 10;
 
 export class ShardVisual {
   root = new Container();
@@ -119,11 +119,6 @@ export class ShardVisual {
   private hist = new Float32Array((SEGS + 1) * 2);
   private histLen = 0;
   private hueBase = 0;
-  // smoothed motion direction + stretch
-  private dirX = 1;
-  private dirY = 0;
-  private stretch = 0;
-  private pulseT = 0;
 
   constructor() {
     this.pos = new Float32Array(N_QUADS * 8);
@@ -179,7 +174,6 @@ export class ShardVisual {
     this.pushHist(x, y);
     this.flash = 0;
     this.squash = 0;
-    this.stretch = 0;
   }
 
   private pushHist(x: number, y: number): void {
@@ -193,75 +187,90 @@ export class ShardVisual {
     this.histLen = Math.min(this.histLen + 1, SEGS + 1);
   }
 
+  private flapPhase = 0;
+
   update(dt: number, pose: ClimberPose, time: number, visible: boolean): void {
     this.root.visible = visible;
     if (!visible) return;
     this.flash = Math.max(0, this.flash - dt * 4);
     this.squash = Math.max(0, this.squash - dt * 5);
     this.hueBase = (this.hueBase + dt * 0.35) % 1;
-    this.pulseT = time;
 
-    // --- motion direction from position history (smoothed) ---
+    // motion (for the tail) from position history
     const prevX = this.hist[0];
     const prevY = this.hist[1];
-    let mx = pose.x - prevX;
-    let my = pose.y - prevY;
+    const mx = pose.x - prevX;
+    const my = pose.y - prevY;
     const mlen = Math.hypot(mx, my);
     const speed = mlen / Math.max(dt, 1e-4);
-    if (mlen > 1e-5) {
-      mx /= mlen;
-      my /= mlen;
-      const k = 1 - Math.exp(-dt * 14);
-      this.dirX += (mx - this.dirX) * k;
-      this.dirY += (my - this.dirY) * k;
-      const dl = Math.hypot(this.dirX, this.dirY) || 1;
-      this.dirX /= dl;
-      this.dirY /= dl;
-    }
 
-    // --- stretch by state + speed ---
-    let targetStretch = Math.min(1, speed * 1.6);
-    if (pose.state === 'dash') targetStretch = 1.8;
-    else if (pose.state === 'grab') targetStretch = 0.1;
-    else if (pose.state === 'run') targetStretch = Math.min(0.45, speed * 1.2);
-    this.stretch += (targetStretch - this.stretch) * (1 - Math.exp(-dt * 10));
+    // the moth faces the light at the tunnel's heart
+    const hx = -Math.cos(pose.posAngle);
+    const hy = -Math.sin(pose.posAngle);
+    const sxv = -hy; // side vector
+    const syv = hx;
+    // bank into the steering
+    const bank = Math.max(-0.5, Math.min(0.5, pose.omega * 0.18));
 
-    const s = pose.size;
+    // wing beat: faster with speed; flared on jumps, folded on dashes
+    const rise = pose.state === 'rise';
+    const dash = pose.state === 'dash';
+    this.flapPhase += dt * (9 + speed * 7) * (rise ? 0.55 : 1);
+    let open = 0.55 + 0.45 * Math.sin(this.flapPhase);
+    if (dash) open = 0.18;
+    if (rise) open = 1.0 + 0.1 * Math.sin(time * 10);
+    const sweep = dash ? -0.34 : -0.06; // wings sweep back when dashing
+
+    const s = pose.size * (1 - 0.18 * this.squash);
     const g = this.glowColor;
     const bright = 1 + this.flash * 0.8;
-    const sq = this.squash;
-    const breathe = 1 + 0.05 * Math.sin(this.pulseT * 5.2);
-    // squash flattens along "up" (radial) and widens tangentially
-    const upX = Math.cos(pose.posAngle + Math.PI);
-    const upY = Math.sin(pose.posAngle + Math.PI);
-    const headX = pose.x;
-    const headY = pose.y;
-    const tailX = headX - this.dirX * s * (0.9 + 1.6 * this.stretch);
-    const tailY = headY - this.dirY * s * (0.9 + 1.6 * this.stretch);
+    const cx = pose.x;
+    const cy = pose.y;
+    const at = (f: number, sd: number) => [cx + hx * s * f + sxv * s * sd, cy + hy * s * f + syv * s * sd] as const;
 
-    // radius helper with squash applied against the surface normal
-    const rad = (base: number) => base * breathe * (1 - 0.28 * sq);
+    // wing geometry (per side): outer pair large, inner pair small
+    const wingR = s * (0.34 + 0.16 * open) * (rise ? 1.25 : 1);
+    const wingR2 = s * (0.22 + 0.1 * open);
+    const spread = 0.36 + 0.34 * open;
+    const [lwx, lwy] = at(0.12 + sweep + bank * 0.4, -spread);
+    const [rwx, rwy] = at(0.12 + sweep - bank * 0.4, spread);
+    const [lw2x, lw2y] = at(-0.3 + sweep * 0.6, -(spread * 0.68));
+    const [rw2x, rw2y] = at(-0.3 + sweep * 0.6, spread * 0.68);
+    const [headX, headY] = at(0.52, 0);
+    const [tailX, tailY] = at(-0.5 - (dash ? 0.5 : 0), 0);
 
     let q = 0;
-    // 1. dark backdrop teardrop (readability over bright bands)
-    this.writeCapsule(q++, headX + upX * s * 0.04 * sq, headY + upY * s * 0.04 * sq,
-      (headX + tailX) / 2, (headY + tailY) / 2,
-      rad(s * 0.62), 0.01, 0.02, 0.06, 0.55);
-    // 2. palette halo (additive)
-    this.writeCircle(q++, headX, headY, rad(s * (0.95 + 0.15 * sq)),
-      g[0] * 0.55 * bright, g[1] * 0.55 * bright, g[2] * 0.55 * bright, 0);
-    // 3. body streak head→tail (additive, white-warm)
-    this.writeCapsule(q++, headX, headY, tailX, tailY, rad(s * 0.3),
-      0.85 * bright, 0.9 * bright, 1.0 * bright, 0);
-    // 4. core (additive, hot)
-    this.writeCircle(q++, headX, headY, rad(s * 0.42),
-      1.0 * bright, 1.0 * bright, 1.0 * bright, 0);
-    // 5. tiny over-bright pip that feeds the post bloom
-    this.writeCircle(q++, headX, headY, rad(s * 0.2), 1.6, 1.6, 1.7, 0);
+    // --- dark silhouette (normal blending: keeps it readable) ---
+    this.writeCapsule(q++, headX, headY, tailX, tailY, s * 0.3, 0.01, 0.02, 0.06, 0.5);
+    this.writeCircle(q++, lwx, lwy, wingR * 1.25, 0.01, 0.02, 0.06, 0.42);
+    this.writeCircle(q++, rwx, rwy, wingR * 1.25, 0.01, 0.02, 0.06, 0.42);
+    // --- glow wings (additive, palette-tinted) ---
+    const wA = 0; // additive rows use alpha 0
+    const wr = g[0] * 0.85 * bright;
+    const wg = g[1] * 0.85 * bright;
+    const wb = g[2] * 0.85 * bright;
+    this.writeCircle(q++, lwx, lwy, wingR, wr, wg, wb, wA);
+    this.writeCircle(q++, rwx, rwy, wingR, wr, wg, wb, wA);
+    this.writeCircle(q++, lw2x, lw2y, wingR2, wr * 0.7, wg * 0.7, wb * 0.7, wA);
+    this.writeCircle(q++, rw2x, rw2y, wingR2, wr * 0.7, wg * 0.7, wb * 0.7, wA);
+    // --- body: white streak + hot core + over-bright pip ---
+    this.writeCapsule(q++, headX, headY, tailX, tailY, s * 0.16,
+      0.85 * bright, 0.9 * bright, 1.0 * bright, wA);
+    this.writeCircle(q++, headX, headY, s * 0.3, bright, bright, bright, wA);
+    this.writeCircle(q++, headX, headY, s * 0.15, 1.6, 1.6, 1.7, wA);
 
     this.body.geometry.getBuffer('aPosition').update();
     this.body.geometry.getBuffer('aCorner').update();
     this.body.geometry.getBuffer('aColor').update();
+
+    void mlen;
+    if (mlen > 0.004) this.pushHist(pose.x, pose.y);
+    else {
+      this.hist[0] = pose.x;
+      this.hist[1] = pose.y;
+    }
+    const histSpeed = speed;
+    void histSpeed;
 
     // --- ribbon tail ---
     if (mlen > 0.004) this.pushHist(pose.x, pose.y);

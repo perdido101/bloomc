@@ -455,15 +455,6 @@ export class PhaseManager {
     return dnaMul * (0.85 + 0.15 * g * g) * this.transitionSpeedBoost * warmup;
   }
 
-  /** player compensation: speed should feel thrilling, not cheap */
-  get jumpBoost(): number {
-    return 1 + 0.04 * this.tier;
-  }
-
-  get coyoteMs(): number {
-    return Math.min(130, TUNING.COYOTE_MS + 10 * this.tier);
-  }
-
   /** dev/test helper: skip to just before the next Bloom */
   warp(): void {
     if (this.transitionT < 0) this.runTime = Math.max(this.runTime, this.nextBloomAt - 0.5);
