@@ -53,5 +53,14 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # The repo's Pages config is stuck in legacy "deploy from branch" mode
+      # (flipping it needs repo-admin rights the workflow token lacks — the
+      # API calls above return 403). The legacy Jekyll build publishes the
+      # raw source a few seconds after every push, clobbering our artifact.
+      # Waiting here guarantees our built site deploys LAST and wins.
+      # Permanent fix: repo Settings → Pages → Source: "GitHub Actions",
+      # then this delay can be removed.
+      - name: Outwait the legacy branch-mode Pages build
+        run: sleep 150
       - id: deployment
         uses: actions/deploy-pages@v4
