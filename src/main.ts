@@ -89,6 +89,8 @@ class Game {
   private dashVisT = 0;
   /** rings fade out behind the main menu (subtle background only) */
   private worldAlpha = 1;
+  /** smoothed ink-mode amount (settings toggle, eased) */
+  private inkAmt = 0;
   /** render-only smoothed radial position (softens landing snaps) */
   private visDepth = 0;
   private visDepthVel = 0;
@@ -591,6 +593,8 @@ class Game {
         ? 1
         : 0.06;
     this.worldAlpha += (wantWorld - this.worldAlpha) * Math.min(1, dtRaw * 3);
+    const wantInk = this.menus.settings.ink ? 1 : 0;
+    this.inkAmt += (wantInk - this.inkAmt) * Math.min(1, dtRaw * 3);
 
     if (this.fsm.is(GameState.MENU, GameState.GAMEOVER)) {
       // attract mode: endless gentle descent (gallery rolls DNA here too)
@@ -772,6 +776,7 @@ class Game {
       vigColor: this.vigColor,
       reduceFlash: this.menus.settings.reduceFlash,
       caScale: pm.tier >= 3 ? 1.6 : 1,
+      ink: this.inkAmt,
     });
 
     // animated wordmark over the splash (kaleidoscope unfurl)
@@ -786,17 +791,27 @@ class Game {
         this.lut.colorFloatAt(0.85, this.wordmark.tint);
       }
       const rect = this.wordmarkEl.getBoundingClientRect();
-      this.wordmark.update(dtRaw, this.time, this.beatPulse, rect, window.innerWidth, window.innerHeight);
+      this.wordmark.update(dtRaw, this.time, this.beatPulse, rect, window.innerWidth, window.innerHeight, this.inkAmt);
       r.render({ container: this.wordmark.mesh, clear: false });
     }
 
     // HUD on top (screen space)
     this.hud.root.visible = this.fsm.playing || this.fsm.is(GameState.DEATH);
     if (this.hud.root.visible) {
-      if (this.lut.revision !== this.hudColorRev) {
+      if (this.lut.revision !== this.hudColorRev || this.inkAmt > 0.01) {
         this.hudColorRev = this.lut.revision;
-        this.hud.setColor(this.lut.colorAt(0.78));
         this.lut.colorFloatAt(0.8, this.shardVisual.glowColor);
+        if (this.inkAmt > 0.5) {
+          // HUD draws after the post chain: apply the same paper-minus-color
+          // transform on the CPU so runes read as ink on paper
+          this.lut.colorFloatAt(0.78, this.vigColor); // scratch reuse
+          const r = Math.round(Math.max(0, 0.965 - this.vigColor[0] * 0.88) * 255);
+          const g = Math.round(Math.max(0, 0.945 - this.vigColor[1] * 0.88) * 255);
+          const b = Math.round(Math.max(0, 0.9 - this.vigColor[2] * 0.88) * 255);
+          this.hud.setColor(`rgb(${r},${g},${b})`);
+        } else {
+          this.hud.setColor(this.lut.colorAt(0.78));
+        }
       }
       this.hud.update(
         dt,

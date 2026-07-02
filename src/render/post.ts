@@ -51,6 +51,7 @@ uniform vec4 uFx;          // caSpike 0..1, ripple 0..1, zoom 0..1, breathe
 uniform vec2 uZoomCenter;  // square-uv focus of the death zoom
 uniform vec3 uVigColor;
 uniform vec4 uParams;      // barrel, bloomGain, caBase, caRadial
+uniform float uInk;        // 0 = neon-on-dark, 1 = ink-on-paper (inverted)
 
 void main() {
   vec2 px = vUV * uScreen;
@@ -89,6 +90,14 @@ void main() {
   // edge so the extended rim fades out naturally
   float vig = smoothstep(0.55, 1.45, r) * (0.55 + 0.03 * uFx.w);
   col = mix(col, uVigColor * 0.28, vig);
+
+  // ink mode: sumi-e inversion — light becomes ink on warm paper. The
+  // wisp's white-hot core turns black, glow becomes ink bleed.
+  if (uInk > 0.001) {
+    vec3 paper = vec3(0.965, 0.945, 0.9);
+    vec3 inked = clamp(paper - col * 0.88, 0.0, 1.0);
+    col = mix(col, inked, uInk);
+  }
 
   finalColor = vec4(col, 1.0);
 }
@@ -146,6 +155,7 @@ export class PostChain {
             value: new Float32Array([TUNING.BARREL_K, 1, TUNING.CA_BASE, TUNING.CA_RADIAL]),
             type: 'vec4<f32>',
           },
+          uInk: { value: 0, type: 'f32' },
         },
         uScene: sceneTex.source,
         uB1: this.halfB.source,
@@ -179,6 +189,8 @@ export class PostChain {
       reduceFlash: boolean;
       /** chromatic aberration base multiplier (tier 3+: 1.6) */
       caScale: number;
+      /** 0..1 ink-on-paper inversion */
+      ink: number;
     }
   ): void {
     renderer.render({ container: this.bright, target: this.brightRT, clear: true });
@@ -213,6 +225,7 @@ export class PostChain {
     (u.uParams as Float32Array)[1] = opts.reduceFlash ? 0.45 : 1.0;
     (u.uParams as Float32Array)[2] = TUNING.CA_BASE * opts.caScale;
     (u.uParams as Float32Array)[3] = TUNING.CA_RADIAL * opts.caScale;
+    u.uInk = opts.ink;
 
     renderer.render({ container: this.composite, clear: true });
   }

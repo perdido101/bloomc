@@ -31,6 +31,7 @@ uniform vec3 uTint;
 uniform float uForm;   // 0 = fully folded mandala, 1 = readable word
 uniform float uTime;
 uniform float uAspect; // quad pixel aspect (w/h)
+uniform float uInk;    // 1 = ink mode: dark letters, normal blending
 
 ${GLSL_FOLD}
 
@@ -66,7 +67,20 @@ void main() {
   col *= 0.9 + 0.12 * sin(uTime * 1.7 + r * 9.0);
   col *= 0.35 + 0.65 * smoothstep(0.0, 0.25, uForm); // fade in from nothing
   float alpha = max(aR, max(aG, aB));
-  finalColor = vec4(col * min(alpha * 2.2, 1.6), 0.0); // additive, bright
+  // soft window so folded smears never clip hard at the quad edges
+  float win = smoothstep(0.0, 0.09, vUV.x) * smoothstep(1.0, 0.91, vUV.x)
+            * smoothstep(0.0, 0.09, vUV.y) * smoothstep(1.0, 0.91, vUV.y);
+  if (uInk > 0.5) {
+    // ink mode: the letters are brushed in dark ink (normal blending)
+    vec3 dark = clamp(vec3(0.97, 0.95, 0.9) - col * 0.95, 0.0, 1.0) * 0.16;
+    // folded smears wash in as grey, only the formed word is full ink —
+    // hides the fold's radial seams which read harsh in dark-on-light
+    float inkFade = 0.3 + 0.7 * smoothstep(0.35, 1.0, uForm);
+    float a = min(alpha, 1.0) * (0.35 + 0.65 * smoothstep(0.0, 0.25, uForm)) * win * inkFade;
+    finalColor = vec4(dark * a, a);
+  } else {
+    finalColor = vec4(col * min(alpha * 2.2, 1.6) * win, 0.0); // additive, bright
+  }
 }
 `;
 
@@ -121,6 +135,7 @@ export class WordmarkFX {
           uForm: { value: 0, type: 'f32' },
           uTime: { value: 0, type: 'f32' },
           uAspect: { value: 1024 / 384, type: 'f32' },
+          uInk: { value: 0, type: 'f32' },
         },
         uText: texture.source,
       },
@@ -143,8 +158,10 @@ export class WordmarkFX {
     beat: number,
     rect: { left: number; top: number; width: number; height: number },
     screenW: number,
-    screenH: number
+    screenH: number,
+    ink = 0
   ): void {
+    this.mesh.blendMode = ink > 0.5 ? 'normal' : 'add';
     this.form = Math.min(1, this.form + dt / 2.6);
     // formed: breathe gently and re-fold a touch on the beat
     const breathe = 0.05 * (0.5 + 0.5 * Math.sin(time * 0.9)) + 0.1 * beat;
@@ -162,5 +179,6 @@ export class WordmarkFX {
     u.uForm = eff;
     u.uTime = time;
     u.uAspect = halfWpx / halfHpx;
+    u.uInk = ink;
   }
 }

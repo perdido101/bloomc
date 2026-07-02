@@ -11,6 +11,8 @@ export interface Settings {
   reduceFlash: boolean;
   sound: boolean;
   music: boolean;
+  /** sumi-e look: bright paper background, ink-black wisp and walls */
+  ink: boolean;
 }
 
 const SETTINGS_KEY = 'bloom_settings_v1';
@@ -18,9 +20,9 @@ const SETTINGS_KEY = 'bloom_settings_v1';
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return { reduceFlash: false, sound: true, music: true, ...JSON.parse(raw) };
+    if (raw) return { reduceFlash: false, sound: true, music: true, ink: false, ...JSON.parse(raw) };
   } catch { /* defaults */ }
-  return { reduceFlash: false, sound: true, music: true };
+  return { reduceFlash: false, sound: true, music: true, ink: false };
 }
 
 function saveSettings(s: Settings): void {
@@ -92,7 +94,9 @@ export class Menus {
     this.bindToggle('optFlash', 'optFlash2', 'reduceFlash');
     this.bindToggle('optSound', 'optSound2', 'sound');
     this.bindToggle('optMusic', 'optMusic2', 'music');
+    this.bindToggle('optInk', 'optInk2', 'ink');
     this.syncToggles();
+    document.body.classList.toggle('ink', this.settings.ink);
   }
 
   private bindToggle(idA: string, idB: string, key: keyof Settings): void {
@@ -101,6 +105,7 @@ export class Menus {
         this.settings[key] = (e.target as HTMLInputElement).checked;
         saveSettings(this.settings);
         this.syncToggles();
+        document.body.classList.toggle('ink', this.settings.ink);
         this.onSettingsChange?.(this.settings);
       });
     }
@@ -111,6 +116,7 @@ export class Menus {
       ['optFlash', 'optFlash2', 'reduceFlash'],
       ['optSound', 'optSound2', 'sound'],
       ['optMusic', 'optMusic2', 'music'],
+      ['optInk', 'optInk2', 'ink'],
     ] as const) {
       el<HTMLInputElement>(a).checked = this.settings[key];
       el<HTMLInputElement>(b).checked = this.settings[key];

@@ -133,6 +133,36 @@
     }
     #tierNote.show { display: flex; animation: tiernote 3.2s ease-out forwards; }
 
+    /* ink mode: dark type on paper */
+    body.ink #ui { color: #262a35; }
+    body.ink .hint, body.ink .strip, body.ink .subTitle, body.ink .howGrid,
+    body.ink .howNote, body.ink #boardList, body.ink #goStats, body.ink #goSeed,
+    body.ink #gameover h2, body.ink #goScore, body.ink #wordmark, body.ink #pauseVeil h2 {
+      color: #262a35; text-shadow: none;
+    }
+    body.ink #wordmark { color: #16181f; }
+    body.ink .strip b, body.ink .howGrid b, body.ink #boardList b,
+    body.ink #goStats b { color: #0d0f14; text-shadow: none; }
+    body.ink .mbtn {
+      color: #20242f; border-color: rgba(32, 36, 48, 0.45);
+      background: rgba(255, 252, 244, 0.5); text-shadow: none;
+    }
+    body.ink .mbtn:hover, body.ink .mbtn:active {
+      border-color: rgba(20, 22, 30, 0.8);
+      box-shadow: 0 0 14px rgba(40, 44, 60, 0.25);
+      background: rgba(255, 252, 244, 0.75);
+    }
+    body.ink #title.show, body.ink #gameover.show, body.ink #howto.show,
+    body.ink #board.show, body.ink #settingsPanel.show {
+      background: radial-gradient(circle at 50% 50%,
+        rgba(250, 248, 240, 0.5) 0%, rgba(250, 248, 240, 0.32) 55%, rgba(250, 248, 240, 0.1) 100%);
+    }
+    body.ink #pauseVeil { background: rgba(245, 242, 233, 0.72); }
+    body.ink #pauseBtn { color: #262a35; text-shadow: none; }
+    body.ink #tierNote { color: #16181f !important; text-shadow: 0 0 18px rgba(0,0,0,0.2); }
+    body.ink #goSeed a { color: #37507a; border-bottom-color: rgba(55, 80, 122, 0.4); }
+    body.ink #newBest { color: #7a4a10; text-shadow: 0 0 16px rgba(160, 110, 30, 0.45); }
+
     .fade { transition: opacity 0.5s ease; }
     #bootMsg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
                font-size: 14px; letter-spacing: 0.4em; opacity: 0.5; }
@@ -188,6 +218,7 @@
       <div class="toggles column">
         <label><input type="checkbox" id="optMusic" checked /> music</label>
         <label><input type="checkbox" id="optSound" checked /> sound effects</label>
+        <label><input type="checkbox" id="optInk" /> ink mode &mdash; paper &amp; ink</label>
         <label><input type="checkbox" id="optFlash" /> reduce flash</label>
       </div>
       <button class="mbtn back" id="btnSettingsBack">BACK</button>
@@ -208,6 +239,7 @@
       <div class="toggles">
         <label><input type="checkbox" id="optMusic2" checked /> music</label>
         <label><input type="checkbox" id="optSound2" checked /> sfx</label>
+        <label><input type="checkbox" id="optInk2" /> ink</label>
         <label><input type="checkbox" id="optFlash2" /> reduce flash</label>
       </div>
     </div>
