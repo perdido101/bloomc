@@ -24,20 +24,54 @@
       gap: 3vh; text-align: center; pointer-events: auto;
     }
     .panel.show { display: flex; }
-    #title.show, #gameover.show {
+    #title.show, #gameover.show, #howto.show, #board.show, #settingsPanel.show {
       background: radial-gradient(circle at 50% 50%,
-        rgba(3, 5, 14, 0.62) 0%, rgba(3, 5, 14, 0.38) 55%, rgba(3, 5, 14, 0.12) 100%);
+        rgba(3, 5, 14, 0.45) 0%, rgba(3, 5, 14, 0.30) 55%, rgba(3, 5, 14, 0.10) 100%);
     }
+
+    .menuBtns { display: flex; flex-direction: column; gap: 2vh; align-items: center; }
+    .mbtn {
+      min-width: min(64vw, 280px); padding: 12px 28px; cursor: pointer;
+      background: rgba(6, 10, 26, 0.35); color: #dff2ff;
+      border: 1px solid rgba(159, 220, 255, 0.35); border-radius: 999px;
+      font-family: inherit; font-size: min(4.2vw, 17px);
+      letter-spacing: 0.35em; text-indent: 0.35em;
+      text-shadow: 0 0 12px currentColor;
+      transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+    }
+    .mbtn:hover, .mbtn:active {
+      border-color: rgba(234, 255, 255, 0.85);
+      box-shadow: 0 0 18px rgba(159, 220, 255, 0.35), inset 0 0 14px rgba(159, 220, 255, 0.12);
+      background: rgba(10, 18, 40, 0.5);
+    }
+    .mbtn.primary { border-color: rgba(234, 255, 255, 0.7);
+      box-shadow: 0 0 22px rgba(159, 220, 255, 0.3); font-size: min(5vw, 20px); }
+    .mbtn.back { min-width: min(40vw, 170px); opacity: 0.8; }
+
+    .subTitle { font-size: min(6vw, 32px); font-weight: 300; color: #eaffff;
+      letter-spacing: 0.45em; text-indent: 0.45em; text-shadow: 0 0 18px currentColor; }
+    .howGrid { display: grid; grid-template-columns: auto auto; gap: 1.2vh 1.4em;
+      font-size: min(3.6vw, 15px); text-align: left; letter-spacing: 0.08em;
+      line-height: 1.65; opacity: 0.9; max-width: min(86vw, 520px); }
+    .howGrid b { color: #eaffff; font-weight: normal; white-space: nowrap;
+      text-shadow: 0 0 10px currentColor; }
+    .howNote { font-size: min(3.2vw, 13px); opacity: 0.6; letter-spacing: 0.12em;
+      max-width: min(86vw, 520px); line-height: 1.8; }
+    #boardList { font-size: min(3.6vw, 15px); letter-spacing: 0.1em; line-height: 2.1;
+      opacity: 0.9; }
+    #boardList b { color: #eaffff; font-weight: normal; }
+    #boardList .rank { opacity: 0.55; margin-right: 0.6em; }
+    .toggles.column { flex-direction: column; gap: 2vh; font-size: min(4vw, 16px); }
 
     @keyframes breathe {
       0%, 100% { letter-spacing: 0.55em; opacity: 0.92; }
       50% { letter-spacing: 0.72em; opacity: 1; }
     }
     #wordmark {
-      font-size: min(9vw, 64px); font-weight: 300; color: #eaffff;
-      letter-spacing: 0.55em; text-indent: 0.55em;
-      text-shadow: 0 0 24px #27c8f0, 0 0 64px #27c8f088;
-      animation: breathe 6s ease-in-out infinite;
+      /* invisible placeholder: the kaleidoscope-unfurl shader draws the
+         wordmark in-canvas at this element's position */
+      font-size: min(9.5vw, 72px); font-weight: 300; color: transparent;
+      letter-spacing: 0.55em; text-indent: 0.55em; text-shadow: none;
     }
     .hint { font-size: min(4vw, 18px); opacity: 0.75; letter-spacing: 0.3em;
             animation: breathe 3s ease-in-out infinite; }
@@ -101,13 +135,47 @@
 
     <div id="title" class="panel">
       <div id="wordmark">BLOOM</div>
-      <div class="hint">TAP TO BEGIN</div>
-      <div class="strip">tap = jump &nbsp;·&nbsp; swipe &#8596; = turn &nbsp;·&nbsp; swipe &#8593; = dash</div>
       <div id="scoreStrip" class="strip"></div>
-      <div class="toggles">
-        <label><input type="checkbox" id="optFlash" /> reduce flash</label>
-        <label><input type="checkbox" id="optSound" checked /> sound</label>
+      <div class="menuBtns">
+        <button class="mbtn primary" id="btnPlay">DESCEND</button>
+        <button class="mbtn" id="btnHow">HOW TO PLAY</button>
+        <button class="mbtn" id="btnBoard">LEADERBOARD</button>
+        <button class="mbtn" id="btnSettings">SETTINGS</button>
       </div>
+    </div>
+
+    <div id="howto" class="panel">
+      <div class="subTitle">HOW TO PLAY</div>
+      <div class="howGrid">
+        <b>tap</b><span>jump inward, ring to ring</span>
+        <b>swipe &#8596;</b><span>flip your run direction</span>
+        <b>swipe &#8593;</b><span>flash-dash (one per jump)</span>
+        <b>gaps</b><span>drop you outward — fall off the rim and you dissolve</span>
+        <b>ledges</b><span>a near-miss grabs the edge and pulls you up</span>
+        <b>skim</b><span>land &amp; leave within &frac12;s to build combo, up to ×8</span>
+        <b>motes</b><span>glowing seeds — collect for 25 × combo</span>
+        <b>hazards</b><span>the pulsing shapes — never touch them</span>
+      </div>
+      <div class="howNote">every Bloom the world transforms — survive it for +500 × blooms.
+        every second Bloom deepens the vortex into a new tier. keyboard: SPACE jump · A/D turn · SHIFT dash</div>
+      <button class="mbtn back" id="btnHowBack">BACK</button>
+    </div>
+
+    <div id="board" class="panel">
+      <div class="subTitle">LEADERBOARD</div>
+      <div id="boardList"></div>
+      <div class="howNote" id="boardNote">local records · global leaderboard coming soon</div>
+      <button class="mbtn back" id="btnBoardBack">BACK</button>
+    </div>
+
+    <div id="settingsPanel" class="panel">
+      <div class="subTitle">SETTINGS</div>
+      <div class="toggles column">
+        <label><input type="checkbox" id="optMusic" checked /> music</label>
+        <label><input type="checkbox" id="optSound" checked /> sound effects</label>
+        <label><input type="checkbox" id="optFlash" /> reduce flash</label>
+      </div>
+      <button class="mbtn back" id="btnSettingsBack">BACK</button>
     </div>
 
     <div id="gameover" class="panel">
@@ -123,8 +191,9 @@
       <h2>SUSPENDED</h2>
       <div class="hint">TAP TO RESUME</div>
       <div class="toggles">
+        <label><input type="checkbox" id="optMusic2" checked /> music</label>
+        <label><input type="checkbox" id="optSound2" checked /> sfx</label>
         <label><input type="checkbox" id="optFlash2" /> reduce flash</label>
-        <label><input type="checkbox" id="optSound2" checked /> sound</label>
       </div>
     </div>
 

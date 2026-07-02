@@ -14,7 +14,7 @@ await page.waitForTimeout(2500);
 
 const state = () => page.evaluate(() => JSON.stringify(window.__vortika, (k, v) => typeof v === 'function' ? undefined : v));
 
-await page.mouse.click(240, 240); // start
+await page.click('#btnPlay');
 await page.waitForTimeout(800);
 console.log('after start:', await state());
 

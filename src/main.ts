@@ -18,6 +18,7 @@ import { ShardVisual } from './render/shard';
 import { Particles } from './render/particles';
 import { Hud } from './ui/hud';
 import { Menus } from './ui/menus';
+import { WordmarkFX } from './render/wordmark';
 import { audio } from './audio/audio';
 
 const TWO_PI = Math.PI * 2;
@@ -84,6 +85,7 @@ class Game {
   private newBestPending = false;
   private readonly vigColor = new Float32Array(3);
   private hudColorRev = -1;
+  private wmTintRev = -1;
   private dashVisT = 0;
   // escalation / DNA state
   private hueShift = 0;
@@ -106,6 +108,8 @@ class Game {
     hazStyle: 0, hazColor: new Float32Array(3), wobbleAmp: 0,
     wobbleFreq: 1, spiralFlow: 0,
   };
+  private wordmark!: WordmarkFX;
+  private wordmarkEl: HTMLElement | null = null;
   private readonly climberPose = {
     x: 0, y: 0, posAngle: 0, omega: 0,
     state: 'run' as import('./render/shard').ClimberState,
@@ -186,6 +190,7 @@ class Game {
           this.scoring.onBloomSurvived(blooms);
         }
         audio.setPhase(this.pm.current.texId);
+        audio.setMusicKey(this.pm.current.palette.baseHue, this.pm.tier, this.pm.current.lull);
         const tex = getPhaseTextures(this.pm.current.texId);
         this.pipeline.wedge.setTextures(tex.sourceA, tex.sourceA);
         this.pipeline.bg.setTextures(tex.sourceB, tex.sourceB);
@@ -226,6 +231,8 @@ class Game {
 
     this.computeLayout();
     this.buildPipeline();
+    this.wordmark = new WordmarkFX('BLOOM');
+    this.wordmarkEl = document.getElementById('wordmark');
 
     this.input = new Input(host);
     this.input.onPause = () => this.togglePause();
@@ -237,10 +244,13 @@ class Game {
     this.menus.onRestart = () => this.startRun();
     this.menus.onPause = () => this.togglePause();
     this.menus.onResume = () => this.togglePause();
+    this.menus.onUiTap = () => audio.init();
     this.menus.onSettingsChange = (s) => {
       audio.enabled = s.sound;
+      audio.musicEnabled = s.music;
     };
     audio.enabled = this.menus.settings.sound;
+    audio.musicEnabled = this.menus.settings.music;
 
     audio.onBeat(() => {
       this.beatPulse = 1;
@@ -408,6 +418,8 @@ class Game {
     this.pipeline.wedge.setTextures(tex.sourceA, tex.sourceA);
     this.pipeline.bg.setTextures(tex.sourceB, tex.sourceB);
     audio.setPhase(this.pm.current.texId);
+    audio.setScene('game');
+    audio.setMusicKey(this.pm.current.palette.baseHue, this.pm.tier, this.pm.current.lull);
     const [x, y] = this.shardClipPos();
     this.shardVisual.reset(x, y);
     this.menus.showRun();
@@ -457,6 +469,7 @@ class Game {
       audio.playSfx('newbest');
     }
     this.menus.showGameOver(rec, isBest);
+    audio.setScene('menu');
     this.fsm.set(GameState.GAMEOVER);
   }
 
@@ -706,6 +719,22 @@ class Game {
       reduceFlash: this.menus.settings.reduceFlash,
       caScale: pm.tier >= 3 ? 1.6 : 1,
     });
+
+    // animated wordmark over the title menu (kaleidoscope unfurl)
+    if (
+      this.fsm.is(GameState.MENU) &&
+      this.galleryEvery === 0 &&
+      this.menus.isTitleShown &&
+      this.wordmarkEl
+    ) {
+      if (this.lut.revision !== this.wmTintRev) {
+        this.wmTintRev = this.lut.revision;
+        this.lut.colorFloatAt(0.85, this.wordmark.tint);
+      }
+      const rect = this.wordmarkEl.getBoundingClientRect();
+      this.wordmark.update(dtRaw, this.time, this.beatPulse, rect, window.innerWidth, window.innerHeight);
+      r.render({ container: this.wordmark.mesh, clear: false });
+    }
 
     // HUD on top (screen space)
     this.hud.root.visible = this.fsm.playing || this.fsm.is(GameState.DEATH);

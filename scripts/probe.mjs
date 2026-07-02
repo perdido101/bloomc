@@ -9,7 +9,7 @@ const page = await browser.newPage({ viewport: { width: 390, height: 740 } });
 page.on('pageerror', (err) => console.log('[pageerror]', String(err).slice(0, 300)));
 await page.goto(url);
 await page.waitForTimeout(3000);
-await page.mouse.click(195, 370);
+await page.click('#btnPlay');
 
 let prev = '';
 const t0 = Date.now();

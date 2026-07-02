@@ -1,23 +1,26 @@
 import { bestScore, loadHighScores, type RunRecord } from '../game/scoring';
 
 /**
- * DOM overlay menus: title (attract mode runs behind it), game over with
- * count-up + NEW BEST moment, pause veil, settings toggles.
+ * DOM overlay: main menu (DESCEND / HOW TO PLAY / LEADERBOARD / SETTINGS)
+ * over the attract-mode kaleidoscope, game over with count-up + NEW BEST,
+ * pause veil, tier-up notes. The wordmark itself is drawn in-canvas by the
+ * kaleidoscope-unfurl shader; the DOM element only reserves its place.
  */
 
 export interface Settings {
   reduceFlash: boolean;
   sound: boolean;
+  music: boolean;
 }
 
-const SETTINGS_KEY = 'vortika_settings_v1';
+const SETTINGS_KEY = 'bloom_settings_v1';
 
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return { reduceFlash: false, sound: true, ...JSON.parse(raw) };
+    if (raw) return { reduceFlash: false, sound: true, music: true, ...JSON.parse(raw) };
   } catch { /* defaults */ }
-  return { reduceFlash: false, sound: true };
+  return { reduceFlash: false, sound: true, music: true };
 }
 
 function saveSettings(s: Settings): void {
@@ -37,8 +40,13 @@ export class Menus {
   onResume: (() => void) | null = null;
   onPause: (() => void) | null = null;
   onSettingsChange: ((s: Settings) => void) | null = null;
+  /** any button press (unlocks WebAudio) */
+  onUiTap: (() => void) | null = null;
 
   private title = el<HTMLDivElement>('title');
+  private howto = el<HTMLDivElement>('howto');
+  private board = el<HTMLDivElement>('board');
+  private settingsPanel = el<HTMLDivElement>('settingsPanel');
   private gameover = el<HTMLDivElement>('gameover');
   private pauseVeil = el<HTMLDivElement>('pauseVeil');
   private pauseBtn = el<HTMLButtonElement>('pauseBtn');
@@ -46,12 +54,24 @@ export class Menus {
   private countUpRaf = 0;
 
   constructor() {
-    this.title.addEventListener('pointerup', (e) => {
-      if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'LABEL') return;
-      this.onStart?.();
-    });
+    const tap = (id: string, fn: () => void) => {
+      el<HTMLButtonElement>(id).addEventListener('pointerup', (e) => {
+        e.stopPropagation();
+        this.onUiTap?.();
+        fn();
+      });
+    };
+    tap('btnPlay', () => this.onStart?.());
+    tap('btnHow', () => this.showPanel(this.howto));
+    tap('btnBoard', () => this.showBoard());
+    tap('btnSettings', () => this.showPanel(this.settingsPanel));
+    tap('btnHowBack', () => this.showTitle());
+    tap('btnBoardBack', () => this.showTitle());
+    tap('btnSettingsBack', () => this.showTitle());
+
     this.gameover.addEventListener('pointerup', (e) => {
       if ((e.target as HTMLElement).tagName === 'A') return;
+      this.onUiTap?.();
       this.onRestart?.();
     });
     this.pauseVeil.addEventListener('pointerup', (e) => {
@@ -63,9 +83,10 @@ export class Menus {
       e.stopPropagation();
       this.onPause?.();
     });
-    // keep the two settings rows in sync
+
     this.bindToggle('optFlash', 'optFlash2', 'reduceFlash');
     this.bindToggle('optSound', 'optSound2', 'sound');
+    this.bindToggle('optMusic', 'optMusic2', 'music');
     this.syncToggles();
   }
 
@@ -81,10 +102,14 @@ export class Menus {
   }
 
   private syncToggles(): void {
-    el<HTMLInputElement>('optFlash').checked = this.settings.reduceFlash;
-    el<HTMLInputElement>('optFlash2').checked = this.settings.reduceFlash;
-    el<HTMLInputElement>('optSound').checked = this.settings.sound;
-    el<HTMLInputElement>('optSound2').checked = this.settings.sound;
+    for (const [a, b, key] of [
+      ['optFlash', 'optFlash2', 'reduceFlash'],
+      ['optSound', 'optSound2', 'sound'],
+      ['optMusic', 'optMusic2', 'music'],
+    ] as const) {
+      el<HTMLInputElement>(a).checked = this.settings[key];
+      el<HTMLInputElement>(b).checked = this.settings[key];
+    }
   }
 
   hideBoot(): void {
@@ -93,13 +118,13 @@ export class Menus {
 
   /** tier-up whisper: "TIER III — THE NESTED DEEP" in glowing type */
   showTierNote(tier: number, name: string, colorCss: string): void {
-    const el = document.getElementById('tierNote') as HTMLDivElement;
+    const note = el<HTMLDivElement>('tierNote');
     const numerals = ['0', 'I', 'II', 'III', 'IV', 'V'];
-    el.textContent = `TIER ${numerals[tier] ?? tier} — ${name}`;
-    el.style.color = colorCss;
-    el.classList.remove('show');
-    void el.offsetWidth; // restart the CSS animation
-    el.classList.add('show');
+    note.textContent = `TIER ${numerals[tier] ?? tier} — ${name}`;
+    note.style.color = colorCss;
+    note.classList.remove('show');
+    void note.offsetWidth; // restart the CSS animation
+    note.classList.add('show');
   }
 
   /** gallery mode: hide all chrome for clean auditions */
@@ -108,13 +133,38 @@ export class Menus {
     this.boot.style.display = 'none';
   }
 
-  showTitle(): void {
+  private showPanel(panel: HTMLDivElement): void {
     this.hideAll();
+    panel.classList.add('show');
+  }
+
+  showTitle(): void {
+    this.showPanel(this.title);
     const best = bestScore();
-    const scores = loadHighScores().slice(0, 5);
-    const rows = scores.map((s, i) => `${i + 1}. <b>${s.score}</b> · ring ${s.depth} · ${s.blooms}✿`).join('<br/>');
-    el<HTMLDivElement>('scoreStrip').innerHTML = best > 0 ? `BEST <b>${best}</b><br/>${rows}` : 'descend into the vortex';
-    this.title.classList.add('show');
+    el<HTMLDivElement>('scoreStrip').innerHTML =
+      best > 0 ? `BEST <b>${best}</b>` : 'descend into the vortex';
+  }
+
+  get isTitleShown(): boolean {
+    return this.title.classList.contains('show');
+  }
+
+  private showBoard(): void {
+    this.showPanel(this.board);
+    const scores = loadHighScores();
+    const list = el<HTMLDivElement>('boardList');
+    if (scores.length === 0) {
+      list.innerHTML = 'no descents yet';
+      return;
+    }
+    list.innerHTML = scores
+      .slice(0, 10)
+      .map(
+        (s, i) =>
+          `<span class="rank">${i + 1}.</span><b>${s.score}</b>` +
+          ` · ring ${s.depth} · ${s.blooms}✿ · ×${s.combo}`
+      )
+      .join('<br/>');
   }
 
   showRun(): void {
@@ -168,9 +218,9 @@ export class Menus {
   }
 
   hideAll(): void {
-    this.title.classList.remove('show');
-    this.gameover.classList.remove('show');
-    this.pauseVeil.classList.remove('show');
+    for (const p of [this.title, this.howto, this.board, this.settingsPanel, this.gameover, this.pauseVeil]) {
+      p.classList.remove('show');
+    }
     this.pauseBtn.classList.remove('show');
   }
 }
