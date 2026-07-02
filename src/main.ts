@@ -88,6 +88,8 @@ class Game {
   private inkAmt = 0;
   // escalation / DNA state
   private hueShift = 0;
+  /** accumulated mandala rotation (DNA rotationDrift) */
+  private spin = 0;
   private tierDipT = 0;
   private strobeFlip = false;
   private galleryEvery = 0; // >0 = gallery mode (?gallery), seconds per DNA
@@ -572,12 +574,19 @@ class Game {
     const p = this.pipeline;
     const r = this.renderer;
     const pm = this.pm;
+    const active = pm.active;
 
     // mirror strobe rule-breaker: flick between the two folds on the beat
     let foldMix = mix;
     if (pm.ruleBreaker?.type === 'mirrorStrobe') {
       foldMix = this.strobeFlip ? 1 : 0;
     }
+
+    // the mandala turns forever (DNA-signed), and corkscrews along z —
+    // the endless spiral you run down
+    this.spin += lerp(cur.rotationDrift, nxt.rotationDrift, mix) * 6 * dt;
+    const spiralRate = 0.06 + lerp(cur.mirrorTwist, nxt.mirrorTwist, mix) * 0.8
+      + lerp(cur.spiralFlow, nxt.spiralFlow, mix) * 0.04;
 
     p.cave.render(r, p.sceneRT, {
       camX: this.cam.x,
@@ -589,16 +598,18 @@ class Game {
       wedgeB: TWO_PI / nxt.mirrorN,
       foldMix,
       texMix: mix,
-      twist: lerp(cur.mirrorTwist, nxt.mirrorTwist, mix) * 4,
+      spin: this.spin,
+      spiralRate,
       dim: this.worldAlpha,
       noiseScale: lerp(cur.noiseScale, nxt.noiseScale, mix),
       wobAmp: lerp(cur.wobble.amp, nxt.wobble.amp, mix),
       wobFreq: lerp(cur.wobble.freq, nxt.wobble.freq, mix),
-      spiralFlow: lerp(cur.spiralFlow, nxt.spiralFlow, mix),
     });
 
     // obstacles + coins + the runner + particles, projected on top
-    this.worldLayer.update(this.track, this.cam, this.square, this.lut, this.time, this.beatPulse);
+    this.worldLayer.update(
+      this.track, this.cam, this.square, this.lut, this.time, this.beatPulse, active.mirrorN
+    );
     this.worldLayer.gfx.alpha = this.worldAlpha;
 
     const showRunner = (this.fsm.playing && this.runner.alive) && !this.paused;

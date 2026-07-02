@@ -1,14 +1,16 @@
 import { Container, Graphics } from 'pixi.js';
 
 /**
- * The light-runner, seen from behind — a hooded figure of living light
- * sprinting into the cave. Layered glow discipline (dark silhouette →
- * palette aura → white-hot core) keeps it readable over ANY generated
- * palette, and the post chain's ink mode inverts it into a brushed-ink
- * figure automatically.
+ * The light-runner, seen from behind — a wraith of living light sprinting
+ * into the kaleidoscope. Everything is drawn with bezier curves: a flowing
+ * cloak that ripples with the stride, a pointed cowl, ribbon trails
+ * streaming off the shoulders, sinuous light-legs. Layered glow discipline
+ * (dark silhouette → palette aura → white-hot core) keeps it readable over
+ * ANY generated palette, and the post chain's ink mode inverts it into a
+ * brushed-ink figure automatically.
  *
- * Poses: run (legs pump with stride), jump (tuck, cape flares), roll
- * (a spinning comma of light), lane lean (whole body banks).
+ * Poses: run (legs pump, cloak ripples), jump (tuck, cloak flares),
+ * roll (a spinning comma of light), lane lean (whole body banks).
  */
 
 export type RunnerPose = 'run' | 'jump' | 'roll';
@@ -70,6 +72,7 @@ export class RunnerVisual {
     const glow = this.glowRGB(1);
     const glowHot = this.glowRGB(1.35);
     const dark = 0x05060d;
+    const cyc = p.stride * Math.PI * 2; // one full stride cycle
 
     // ---- floor shadow / light pool (reads jump height) ----
     const shScale = 1 / (1 + p.y * 0.55);
@@ -78,27 +81,22 @@ export class RunnerVisual {
     sh.ellipse(p.px, p.py, h * 0.48 * shScale, h * 0.13 * shScale)
       .fill({ color: glow, alpha: 0.15 * shScale });
 
-    // feet-anchor moves up with jumps
-    const fy = p.py - p.y * p.k;
-
-    g.position.set(0, 0);
-    g.pivot.set(0, 0);
-    g.rotation = 0;
+    // feet-anchor rises with jumps; a soft bob rides the stride
+    const bob = p.pose === 'run' ? Math.abs(Math.sin(cyc)) * h * 0.035 : 0;
+    const fy = p.py - p.y * p.k - bob;
 
     if (p.pose === 'roll') {
       // a spinning comma of light hugging the floor
       const r = h * 0.26;
-      const cy = fy - r;
+      const cy = p.py - r;
       const a0 = p.rollP * Math.PI * 4;
       g.circle(p.px, cy, r * 1.5).fill({ color: glow, alpha: 0.16 });
       g.circle(p.px, cy, r).fill({ color: dark, alpha: 0.92 })
         .stroke({ color: glow, alpha: 0.9, width: Math.max(1.5, h * 0.05) });
-      // swirl marks show the spin
       g.arc(p.px, cy, r * 0.62, a0, a0 + 1.9)
         .stroke({ color: glowHot, alpha: 0.9, width: Math.max(1.5, h * 0.05) });
       g.arc(p.px, cy, r * 0.3, a0 + 2.5, a0 + 4.1)
         .stroke({ color: 0xffffff, alpha: 0.95, width: Math.max(1, h * 0.035) });
-      // speed streaks behind the ball
       g.moveTo(p.px - r * 1.6, cy + r * 0.5).lineTo(p.px - r * 0.4, cy + r * 0.5)
         .moveTo(p.px - r * 1.3, cy - r * 0.2).lineTo(p.px - r * 0.2, cy - r * 0.2)
         .stroke({ color: glow, alpha: 0.5, width: Math.max(1, h * 0.03) });
@@ -107,76 +105,98 @@ export class RunnerVisual {
 
     const lean = Math.max(-0.45, Math.min(0.45, p.lean * 0.16));
     const jump = p.pose === 'jump';
-    // tuck: body compresses a touch at the apex
     const tuck = jump ? 0.88 + 0.12 * Math.abs(1 - p.jumpP * 2) : 1;
     const bh = h * tuck;             // body height
     const hipY = fy - bh * 0.46;
-    const shoY = fy - bh * 0.76;
-    const headY = fy - bh * 0.86;
+    const shoY = fy - bh * 0.74;
+    const headY = fy - bh * 0.87;
     const lx = (t: number) => p.px + lean * bh * t; // lean shear by height
 
-    // ---- legs: two strokes of light, pumping with the stride ----
-    const stepA = Math.sin(p.stride * Math.PI * 2);
-    const stepB = Math.sin(p.stride * Math.PI * 2 + Math.PI);
-    const legW = Math.max(1.5, bh * 0.062);
-    const legLen = bh * 0.48;
+    // ---- legs: sinuous strokes of light, pumping with the stride ----
+    const stepA = Math.sin(cyc);
+    const stepB = Math.sin(cyc + Math.PI);
+    const legW = Math.max(1.5, bh * 0.06);
     const drawLeg = (side: number, s: number) => {
-      const hipX = lx(0.42) + side * bh * 0.10;
-      let kx: number, ky: number, fx: number, fyy: number;
+      const hipX = lx(0.46) + side * bh * 0.08;
+      let fx: number, fyy: number, kx: number, ky: number;
       if (jump) {
-        // tucked: knees up, feet back
-        kx = hipX + side * bh * 0.06;
-        ky = hipY + legLen * 0.35;
-        fx = kx - bh * 0.10;
-        fyy = ky + legLen * 0.2;
+        kx = hipX + side * bh * 0.10;
+        ky = hipY + bh * 0.20;
+        fx = hipX - bh * 0.06 + side * bh * 0.04;
+        fyy = hipY + bh * 0.30;
       } else {
-        kx = hipX + s * bh * 0.07;
-        ky = hipY + legLen * 0.55;
-        fx = kx + s * bh * 0.12;
-        fyy = hipY + legLen * (0.95 - 0.18 * Math.max(0, s));
+        kx = hipX + s * bh * 0.10;
+        ky = hipY + bh * 0.26;
+        fx = hipX + s * bh * 0.20;
+        fyy = fy - bh * 0.02 - Math.max(0, s) * bh * 0.12;
       }
-      g.moveTo(hipX, hipY).lineTo(kx, ky).lineTo(fx, fyy)
-        .stroke({ color: glow, alpha: 0.95, width: legW, cap: 'round', join: 'round' });
-      // foot spark on the down-stride
+      g.moveTo(hipX, hipY).quadraticCurveTo(kx, ky, fx, fyy)
+        .stroke({ color: glow, alpha: 0.95, width: legW, cap: 'round' });
+      g.moveTo(hipX, hipY).quadraticCurveTo(kx, ky, fx, fyy)
+        .stroke({ color: 0xffffff, alpha: 0.55, width: legW * 0.4, cap: 'round' });
       const spark = jump ? 0.4 : Math.max(0, -s);
       if (spark > 0.1) {
-        g.circle(fx, fyy, legW * (0.8 + spark * 0.8))
-          .fill({ color: 0xffffff, alpha: 0.5 + 0.4 * spark });
+        g.circle(fx, fyy, legW * (0.7 + spark * 0.7))
+          .fill({ color: 0xffffff, alpha: 0.45 + 0.4 * spark });
       }
     };
     drawLeg(-1, stepA);
     drawLeg(1, stepB);
 
-    // ---- cape: the hooded cloak, fluttering with speed ----
-    const flut = (t: number) =>
-      Math.sin(time * 13 + t * 5.2) * bh * 0.035 * (jump ? 1.8 : 1);
-    const hemY = hipY + bh * 0.16 - (jump ? bh * 0.12 : 0);
-    const capeW = bh * 0.34;
-    g.poly([
-      lx(0.78) - capeW * 0.55, shoY,                     // left shoulder
-      lx(0.78) + capeW * 0.55, shoY,                     // right shoulder
-      lx(0.42) + capeW * (jump ? 1.15 : 0.9) + flut(0.9), hemY + flut(0.3),
-      lx(0.42) + capeW * 0.3, hemY + bh * 0.05 + flut(0.7),
-      lx(0.42) - capeW * 0.3, hemY + bh * 0.05 + flut(0.1),
-      lx(0.42) - capeW * (jump ? 1.15 : 0.9) - flut(0.5), hemY + flut(0.9),
-    ])
-      .fill({ color: dark, alpha: 0.93 })
-      .stroke({ color: glow, alpha: 0.85, width: Math.max(1.5, bh * 0.045), join: 'round' });
+    // ---- ribbon trails: light streaming off the shoulders ----
+    const ribW = Math.max(1, bh * 0.028);
+    for (const side of [-1, 1]) {
+      const sx = lx(0.72) + side * bh * 0.14;
+      const w1 = Math.sin(time * 11 + side * 2.1) * bh * 0.05;
+      const w2 = Math.sin(time * 9 + side * 4.4) * bh * 0.09;
+      g.moveTo(sx, shoY + bh * 0.04)
+        .bezierCurveTo(
+          sx + side * bh * 0.22, shoY + bh * 0.22 + w1,
+          sx + side * bh * 0.30 + w2, shoY + bh * 0.46,
+          sx + side * bh * (jump ? 0.46 : 0.34), shoY + bh * (jump ? 0.52 : 0.66) + w2
+        )
+        .stroke({ color: glow, alpha: 0.42, width: ribW, cap: 'round' });
+    }
 
-    // ---- arms: slight opposite swing, seen at the cape's sides ----
-    const armW = Math.max(1.2, bh * 0.045);
-    const swing = jump ? 0.5 : 1;
-    g.moveTo(lx(0.78) - capeW * 0.5, shoY)
-      .lineTo(lx(0.6) - capeW * (0.72 + 0.18 * stepB * swing), shoY + bh * 0.22)
-      .moveTo(lx(0.78) + capeW * 0.5, shoY)
-      .lineTo(lx(0.6) + capeW * (0.72 + 0.18 * stepA * swing), shoY + bh * 0.22)
-      .stroke({ color: glow, alpha: 0.8, width: armW, cap: 'round' });
+    // ---- the cloak: one flowing bezier silhouette, hem rippling ----
+    const swy = (ph: number) => Math.sin(time * 12 + ph) * bh * 0.028 * (jump ? 2 : 1);
+    const hemY = hipY + bh * 0.08 - (jump ? bh * 0.10 : 0);
+    const hw = bh * (jump ? 0.42 : 0.30 + 0.02 * Math.sin(cyc * 2)); // hem half-width
+    const shoW = bh * 0.15;
+    const Ls = lx(0.72) - shoW;
+    const Rs = lx(0.72) + shoW;
+    g.moveTo(Ls, shoY)
+      // left side: bells outward to the hem
+      .bezierCurveTo(
+        lx(0.6) - bh * 0.26, shoY + bh * 0.16,
+        lx(0.46) - hw, hemY - bh * 0.10,
+        lx(0.44) - hw, hemY + swy(0)
+      )
+      // rippling hem: two soft scallops
+      .quadraticCurveTo(lx(0.44) - hw * 0.45, hemY + bh * 0.10 + swy(2.2), lx(0.44), hemY + bh * 0.05 + swy(4.1))
+      .quadraticCurveTo(lx(0.44) + hw * 0.45, hemY + bh * 0.11 + swy(5.6), lx(0.44) + hw, hemY + swy(1.3))
+      // right side back up to the shoulder
+      .bezierCurveTo(
+        lx(0.46) + hw, hemY - bh * 0.10,
+        lx(0.6) + bh * 0.26, shoY + bh * 0.16,
+        Rs, shoY
+      )
+      // rounded shoulders over the top
+      .quadraticCurveTo(lx(0.74), shoY - bh * 0.10, Ls, shoY)
+      .fill({ color: dark, alpha: 0.94 })
+      .stroke({ color: glow, alpha: 0.85, width: Math.max(1.5, bh * 0.042), join: 'round' });
 
-    // ---- hood: round, dark, rimmed with light, overlapping the cape ----
-    const hr = bh * 0.12;
-    g.circle(lx(0.86), headY, hr)
+    // ---- the cowl: a pointed hood swept back by the run ----
+    const hx = lx(0.88);
+    const hr = bh * 0.115;
+    g.moveTo(hx - hr, headY + hr * 0.5)
+      .quadraticCurveTo(hx - hr * 1.05, headY - hr * 0.8, hx - hr * 0.15, headY - hr * 1.05)
+      // the tip trails behind (down-screen) and flickers
+      .quadraticCurveTo(hx + hr * 1.6, headY - hr * 1.3 + swy(3), hx + hr * 1.9, headY - hr * 0.2 + swy(6))
+      .quadraticCurveTo(hx + hr * 1.1, headY - hr * 0.1, hx + hr * 0.95, headY + hr * 0.45)
+      .quadraticCurveTo(hx, headY + hr * 1.15, hx - hr, headY + hr * 0.5)
       .fill({ color: dark, alpha: 0.96 })
-      .stroke({ color: glowHot, alpha: 0.9, width: Math.max(1.2, bh * 0.032) });
+      .stroke({ color: glowHot, alpha: 0.9, width: Math.max(1.2, bh * 0.032), join: 'round' });
 
     // ---- the light heart: a small white-hot core between the shoulders ----
     const pulse = 1 + 0.12 * Math.sin(time * 6);

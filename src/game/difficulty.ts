@@ -35,8 +35,8 @@ export const TUNING = {
   CAM_H: 2.8,               // camera height above the floor
   CAM_Z0: 5,                // the runner's fixed depth ahead of the camera
   VP_Y: 0.22,               // vanishing point height, clip units
-  CAVE_HALF_W: 3.1,         // cave wall distance from center
-  CAVE_H: 5.4,              // cave ceiling height
+  TUNNEL_R: 3.5,            // kaleidoscope tunnel radius
+  TUNNEL_Y: 1.5,            // tunnel axis height above the floor
 
   // --- touch gestures (classic runner) ---
   SWIPE_MIN_PX: 32,

@@ -4,18 +4,17 @@ import { TUNING } from '../game/difficulty';
 import { GLSL_FOLD, QUAD_VERT, es300, fullscreenGeometry } from './gfx';
 
 /**
- * The kaleidoscope cave (behind-the-runner view). A single fullscreen pass
- * ray-casts a rectangular corridor in one-point perspective — floor,
- * ceiling, two walls — and wraps a live kaleidoscope over every surface:
- * the cross-section angle around the corridor axis is mirror-folded
- * (mirrorN wedges, matching the DNA), the fold twists slowly along z, and
- * the folded coordinate samples the phase texture through the palette LUT.
- * Glowing ribs sweep past every few meters for speed feel, the floor
- * carries three lit lane guides, and everything vanishes into a portal
- * of light at the vanishing point.
+ * The kaleidoscope tunnel (behind-the-runner view). A single fullscreen
+ * pass ray-casts a CYLINDER in one-point perspective — a true mandala
+ * around the vanishing point — with a flat floor chord to run on. The
+ * cross-section angle is mirror-folded into mirrorN wedges (matching the
+ * live DNA), the whole pattern corkscrews along z (endless spiral) and
+ * slowly rotates, petal accents give the fold visible structure, and
+ * glowing mandala rings sweep past for speed. Everything vanishes into a
+ * portal of light at the center.
  *
- * The projection here is the exact inverse of project() in main.ts —
- * obstacles drawn on top land pixel-perfectly on these surfaces.
+ * The projection is the exact inverse of project() in main.ts — obstacles
+ * drawn on top land pixel-perfectly on these surfaces.
  */
 
 const FRAG = /* glsl */ `
@@ -26,10 +25,10 @@ uniform sampler2D uTexA;
 uniform sampler2D uTexB;
 uniform sampler2D uLut;
 uniform vec4 uCam;    // camX, camY, camZ, focal
-uniform vec4 uGeo;    // vpY, halfW, caveH, laneX
+uniform vec4 uGeo;    // vpY, tunnelR, axisY, laneX
 uniform vec4 uFold;   // wedgeA, wedgeB, foldMix, texMix
-uniform vec4 uMotion; // time, beat, twist, dim
-uniform vec4 uLook;   // noiseScale, wobAmp, wobFreq, spiralFlow
+uniform vec4 uMotion; // time, beat, spin, dim
+uniform vec4 uLook;   // noiseScale, wobAmp, wobFreq, spiralRate
 
 ${GLSL_FOLD}
 
@@ -43,37 +42,40 @@ void main() {
   float time = uMotion.x;
   vec2 rd = vec2(p.x, p.y - uGeo.x); // ray slope per unit z
 
-  // cave breathes a little (wobble from the DNA)
-  float breathe = 1.0 + uLook.y * 1.4 * sin(time * uLook.z + p.x * 2.0);
-  float W = uGeo.y * breathe;
-  float H = uGeo.z * breathe;
+  // the tunnel breathes a little (wobble from the DNA)
+  float R = uGeo.y * (1.0 + uLook.y * 1.2 * sin(time * uLook.z));
+  float yc = uGeo.z;
 
-  // nearest surface along +z: floor y=0, ceiling y=H, walls x=±W
-  float dz = 240.0;
-  if (rd.y < -1e-4) dz = min(dz, -uCam.y * F / rd.y);
-  if (rd.y >  1e-4) dz = min(dz, (H - uCam.y) * F / rd.y);
-  if (abs(rd.x) > 1e-4) {
-    float dw = ((rd.x > 0.0 ? W : -W) - uCam.x) * F / rd.x;
-    if (dw > 0.0) dz = min(dz, dw);
+  // cylinder |(x, y) - (0, yc)| = R along the ray (camera is inside)
+  float qa = dot(rd, rd) / (F * F);
+  float qb = 2.0 * (rd.x * uCam.x + rd.y * (uCam.y - yc)) / F;
+  float qc = uCam.x * uCam.x + (uCam.y - yc) * (uCam.y - yc) - R * R;
+  float dzC = (-qb + sqrt(max(qb * qb - 4.0 * qa * qc, 0.0))) / max(2.0 * qa, 1e-6);
+
+  // floor chord y = 0, only inside the cylinder
+  float halfW = sqrt(max(R * R - yc * yc, 0.0));
+  float dzF = 1e9;
+  if (rd.y < -1e-4) {
+    float d = -uCam.y * F / rd.y;
+    float xf = uCam.x + rd.x * d / F;
+    if (abs(xf) <= halfW) dzF = d;
   }
-  dz = clamp(dz, 0.35, 240.0);
+  bool onFloor = dzF < dzC;
+  float dz = clamp(min(dzF, dzC), 0.35, 240.0);
 
   vec3 hit = vec3(uCam.x + rd.x * dz / F, uCam.y + rd.y * dz / F, uCam.z + dz);
-  bool onFloor = rd.y < -1e-4 && abs(dz + uCam.y * F / rd.y) < 1e-3;
-  bool onCeil  = rd.y >  1e-4 && abs(dz - (H - uCam.y) * F / rd.y) < 1e-3;
 
-  // ---- the kaleidoscope: fold the cross-section angle ----
-  float ang = atan(hit.y - H * 0.42, hit.x);
-  float aa = ang + uMotion.z * hit.z * 0.05 + time * 0.05
+  // ---- the kaleidoscope: fold the angle around the tunnel axis ----
+  float th = atan(hit.y - yc, hit.x);
+  float aa = th + uMotion.z + hit.z * uLook.w
            + uLook.y * sin(hit.z * 0.35 + time * uLook.z) * 1.6;
   float fA = fold(aa, uFold.x) / uFold.x;
   float fB = fold(aa, uFold.y) / uFold.y;
   float fw = mix(fA, fB, uFold.z);
 
-  // pattern coordinates: fold across the wedge, real distance along z —
-  // a texture tile every ~8–15 units so shapes RUSH PAST instead of
-  // smearing into rays
-  float zn = hit.z * (0.06 + uLook.x * 0.015) + uLook.w * sin(fw * 6.2831) * 0.05;
+  // pattern coordinates: a texture tile every ~8–15 units so shapes RUSH
+  // PAST instead of smearing into rays
+  float zn = hit.z * (0.06 + uLook.x * 0.015);
   vec2 tuv = vec2(fw * (0.5 + uLook.x * 0.1), zn + fw * 0.13);
   vec3 tA = texture(uTexA, tuv).rgb;
   vec3 tB = texture(uTexB, tuv).rgb;
@@ -82,26 +84,25 @@ void main() {
 
   vec3 col = lut(lum) * (0.42 + 0.58 * lum);
 
-  // mirror seams glow — the spokes of the mandala, racing past
+  // petal accents — every wedge blooms toward its center line
+  float pet = pow(0.5 + 0.5 * cos((fw * 2.0 - 1.0) * 3.14159), 3.0);
+  col += lut(0.72) * pet * (0.20 + 0.10 * uMotion.y);
+
+  // mirror seams glow — the spokes of the mandala, corkscrewing past
   float sd = min(fw, 1.0 - fw);
-  col += lut(0.85) * exp(-sd * sd * 140.0) * 0.18;
+  col += lut(0.88) * exp(-sd * sd * 160.0) * 0.30;
 
-  // each surface reads distinctly: ceiling recedes, walls step back
-  if (onCeil) col *= 0.55;
-  else if (!onFloor) col *= 0.75;
-
-  // ribs: glowing hoops every 6 units, pulsing on the beat
+  // mandala rings every 6 units, pulsing on the beat
   float rib = fract(hit.z / 6.0);
   rib = min(rib, 1.0 - rib);
-  col += lut(0.92) * exp(-rib * rib * 900.0) * (0.3 + 0.55 * uMotion.y);
+  col += lut(0.92) * exp(-rib * rib * 900.0) * (0.35 + 0.55 * uMotion.y);
 
   if (onFloor) {
-    col *= 0.4; // the floor reads as ground, not wall
+    col *= 0.36; // the floor reads as ground, not pattern
     // three lit lanes: guide lines at the lane boundaries
     float ax = abs(hit.x);
     float dl = min(abs(ax - uGeo.w * 0.5), abs(ax - uGeo.w * 1.5));
-    col += lut(0.8) * exp(-dl * dl * 90.0) * 0.7;
-    // faint center-lane sheen
+    col += lut(0.8) * exp(-dl * dl * 90.0) * 0.5;
     col += lut(0.6) * exp(-hit.x * hit.x * 1.2) * 0.05;
   }
 
@@ -109,7 +110,7 @@ void main() {
   float fog = 1.0 - exp(-dz * 0.030);
   col = mix(col, lut(0.06) * 0.85, fog * fog);
 
-  // the portal: light at the end of the cave
+  // the portal: light at the end of the spiral
   vec2 vp = p - vec2(0.0, uGeo.x);
   float port = exp(-dot(vp, vp) * 7.0);
   col += lut(0.94) * port * port * (0.55 + 0.25 * uMotion.y);
@@ -130,13 +131,15 @@ export interface CaveOpts {
   wedgeB: number;
   foldMix: number;
   texMix: number;
-  twist: number;
-  /** 0..1 whole-world brightness (menus dim the cave) */
+  /** live rotation of the whole mandala, radians */
+  spin: number;
+  /** helix: radians of pattern twist per world unit of depth */
+  spiralRate: number;
+  /** 0..1 whole-world brightness (menus dim the tunnel) */
   dim: number;
   noiseScale: number;
   wobAmp: number;
   wobFreq: number;
-  spiralFlow: number;
 }
 
 export class CavePass {
@@ -149,12 +152,12 @@ export class CavePass {
         caveUniforms: {
           uCam: { value: new Float32Array([0, TUNING.CAM_H, 0, TUNING.CAM_F]), type: 'vec4<f32>' },
           uGeo: {
-            value: new Float32Array([TUNING.VP_Y, TUNING.CAVE_HALF_W, TUNING.CAVE_H, TUNING.LANE_X]),
+            value: new Float32Array([TUNING.VP_Y, TUNING.TUNNEL_R, TUNING.TUNNEL_Y, TUNING.LANE_X]),
             type: 'vec4<f32>',
           },
           uFold: { value: new Float32Array([Math.PI / 4, Math.PI / 4, 0, 0]), type: 'vec4<f32>' },
           uMotion: { value: new Float32Array([0, 0, 0, 1]), type: 'vec4<f32>' },
-          uLook: { value: new Float32Array([3, 0, 1, 0]), type: 'vec4<f32>' },
+          uLook: { value: new Float32Array([3, 0, 1, 0.08]), type: 'vec4<f32>' },
         },
         uTexA: texA.source,
         uTexB: texA.source,
@@ -183,13 +186,13 @@ export class CavePass {
     const mo = u.uMotion as Float32Array;
     mo[0] = o.time;
     mo[1] = o.beat;
-    mo[2] = o.twist;
+    mo[2] = o.spin;
     mo[3] = o.dim;
     const lk = u.uLook as Float32Array;
     lk[0] = o.noiseScale;
     lk[1] = o.wobAmp;
     lk[2] = o.wobFreq;
-    lk[3] = o.spiralFlow;
+    lk[3] = o.spiralRate;
     renderer.render({ container: this.mesh, target, clear: true });
   }
 }
