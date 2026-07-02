@@ -1,12 +1,13 @@
 /**
- * Deterministic runner/track/scoring tests for the 3-lane cave runner:
- * fairness invariants, lane tweens, jump/roll clearances, gate kills,
- * coin collection, DNA sanity. Run: npm test
+ * Deterministic runner/track/scoring tests for the kaleidoscope-ring
+ * flight: fairness invariants (a reachable gap always exists), lane/tier
+ * tweens, gap passes vs pattern crashes, coins, DNA sanity. Run: npm test
  */
 import { TUNING } from '../src/game/difficulty';
 import { Runner, type RunnerEvents, type RunnerInput } from '../src/game/player';
 import {
-  TrackField, hashSeed, XorShift, type Obstacle, type WorldGen,
+  CELLS, TrackField, cellDist, cellIndex, cellX, cellY, hashSeed, XorShift,
+  type WorldGen,
 } from '../src/game/track';
 import { generateDNA, visualLoad } from '../src/game/phases';
 import { Scoring } from '../src/game/scoring';
@@ -22,17 +23,27 @@ function check(name: string, cond: boolean): void {
 /** scripted input double */
 class FakeInput implements RunnerInput {
   lane = 0;
-  jump = false;
-  roll = false;
+  vert = 0;
+  flip = false;
   consumeLane(): number { const l = this.lane; this.lane = 0; return l; }
-  consumeJump(): boolean { const j = this.jump; this.jump = false; return j; }
-  consumeRoll(): boolean { const r = this.roll; this.roll = false; return r; }
+  consumeVert(): number { const v = this.vert; this.vert = 0; return v; }
+  consumeFlip(): boolean { const f = this.flip; this.flip = false; return f; }
 }
 
-/** track double with hand-placed obstacles/coins */
-function makeTrack(obstacles: Obstacle[], coins: Array<{ z: number; lane: number }> = []): TrackField {
+/** track double with hand-placed rings/coins */
+function makeTrack(
+  rings: Array<{ z: number; openCells: number[] }>,
+  coins: Array<{ z: number; cell: number }> = []
+): TrackField {
   const t = new TrackField(1);
-  t.obstacles = obstacles.slice().sort((a, b) => a.z - b.z);
+  t.events = rings
+    .slice()
+    .sort((a, b) => a.z - b.z)
+    .map((r) => {
+      const open = new Array<boolean>(CELLS).fill(false);
+      for (const c of r.openCells) open[c] = true;
+      return { z: r.z, open, pathCell: r.openCells[0] ?? 1 };
+    });
   t.coins = coins.map((c) => ({ ...c, taken: false }));
   return t;
 }
@@ -51,7 +62,19 @@ function step(
 }
 
 /* ------------------------------------------------------------------ */
-/*  Track generation invariants                                        */
+/*  Grid helpers                                                       */
+/* ------------------------------------------------------------------ */
+{
+  check('grid: cell round-trips', cellIndex(-1, 0) === 0 && cellIndex(1, 1) === 5);
+  check('grid: cellX/Y place the six cells',
+    cellX(0) === -TUNING.LANE_X && cellY(0) === TUNING.TIER_Y0 &&
+    cellX(5) === TUNING.LANE_X && cellY(5) === TUNING.TIER_Y1);
+  check('grid: one move = lane step or tier flip',
+    cellDist(1, 2) === 1 && cellDist(1, 4) === 1 && cellDist(0, 5) === 3);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Track generation invariants                                       */
 /* ------------------------------------------------------------------ */
 {
   // determinism: identical seeds → identical worlds
@@ -60,21 +83,22 @@ function step(
   a.ensure(2000, GEN, 1);
   b.ensure(2000, GEN, 1);
   check('track: deterministic per seed',
-    JSON.stringify(a.obstacles) === JSON.stringify(b.obstacles) &&
+    JSON.stringify(a.events) === JSON.stringify(b.events) &&
     JSON.stringify(a.coins) === JSON.stringify(b.coins));
 
   const c = new TrackField(hashSeed('other'));
   c.ensure(2000, GEN, 1);
   check('track: different seeds differ',
-    JSON.stringify(a.obstacles) !== JSON.stringify(c.obstacles));
+    JSON.stringify(a.events) !== JSON.stringify(c.events));
 }
 
 {
   // fairness sweep across seeds, tiers and layouts
   let runwayOk = true;
   let gapOk = true;
-  let fairOk = true;
+  let openOk = true;
   let reachOk = true;
+  let easyStartOk = true;
   const layouts: WorldGen['layoutStyle'][] = ['even-gaps', 'cluster', 'staircase-drift'];
   for (let s = 0; s < 24; s++) {
     const gen: WorldGen = {
@@ -86,52 +110,47 @@ function step(
     const t = new TrackField(hashSeed(`fair:${s}`));
     t.ensure(2500, gen, 1 + (s % 3));
 
-    for (const o of t.obstacles) {
-      if (o.z < TUNING.RUNWAY_Z - 1e-6) runwayOk = false;
-    }
+    if (t.events[0].z < TUNING.RUNWAY_Z - 1e-6) runwayOk = false;
     for (let i = 1; i < t.events.length; i++) {
-      const gap = t.events[i].z - t.events[i - 1].z;
-      if (gap < TUNING.EVENT_GAP_MIN * 0.8) gapOk = false;
+      if (t.events[i].z - t.events[i - 1].z < TUNING.EVENT_GAP_MIN * 0.999) gapOk = false;
     }
-    // every event: either the path lane is clear, or the whole event is
-    // one action (full-width low/high bar)
     for (const e of t.events) {
-      const pathCell = e.cells[e.pathLane + 1];
-      const full = e.cells[0] === e.cells[1] && e.cells[1] === e.cells[2] &&
-        (e.cells[0] === 'low' || e.cells[0] === 'high');
-      if (pathCell !== 'clear' && !full) fairOk = false;
-      if (e.cells.every((c) => c === 'gate')) fairOk = false;
+      if (!e.open.some(Boolean)) openOk = false;
+      if (!e.open[e.pathCell]) openOk = false;
     }
-    // the path lane never moves more than one lane between events
+    // the path gap never needs more than one move per ring
     for (let i = 1; i < t.events.length; i++) {
-      if (Math.abs(t.events[i].pathLane - t.events[i - 1].pathLane) > 1) reachOk = false;
+      if (cellDist(t.events[i].pathCell, t.events[i - 1].pathCell) > 1) reachOk = false;
+    }
+    // opening rings are generous
+    for (let i = 0; i < 3 && i < t.events.length; i++) {
+      if (t.events[i].open.filter(Boolean).length < 3) easyStartOk = false;
     }
   }
-  check('track: runway is obstacle-free', runwayOk);
-  check('track: event gaps never collapse', gapOk);
-  check('track: every event survivable on the path lane', fairOk);
-  check('track: path lane moves ≤1 lane per event', reachOk);
+  check('track: runway is ring-free', runwayOk);
+  check('track: ring gaps never collapse', gapOk);
+  check('track: every ring keeps an open path gap', openOk);
+  check('track: path gap moves ≤1 move per ring', reachOk);
+  check('track: opening rings are generous', easyStartOk);
 }
 
 {
-  // coins sit on the path lane of their event and are never inside walls
+  // coins ride real cells; prune trims the past
   const t = new TrackField(hashSeed('coins'));
   t.ensure(2500, GEN, 1);
-  let laneOk = true;
+  let cellOk = true;
   for (const c of t.coins) {
-    if (c.lane !== -1 && c.lane !== 0 && c.lane !== 1) laneOk = false;
+    if (c.cell < 0 || c.cell >= CELLS) cellOk = false;
   }
-  check('track: coins ride real lanes', laneOk && t.coins.length > 0);
-
-  // prune drops everything behind
-  const before = t.obstacles.length;
+  check('track: coins ride real cells', cellOk && t.coins.length > 0);
+  const before = t.events.length;
   t.prune(1000);
   check('track: prune trims the past',
-    t.obstacles.length < before && t.obstacles.every((o) => o.z >= 1000));
+    t.events.length < before && t.events.every((e) => e.z >= 1000));
 }
 
 /* ------------------------------------------------------------------ */
-/*  Runner: lanes, jumps, rolls, crashes                               */
+/*  Runner: lanes, tiers, gap passes, crashes                          */
 /* ------------------------------------------------------------------ */
 {
   const r = new Runner();
@@ -144,102 +163,84 @@ function step(
     r.lane === -1 && Math.abs(r.x - -TUNING.LANE_X) < 1e-3);
   input.lane = -1;
   step(r, input, track, TUNING.LANE_TWEEN_S + 0.06);
-  check('runner: cannot leave the track', r.lane === -1);
-  input.lane = 1;
+  check('runner: cannot leave the grid', r.lane === -1);
+  input.lane = 2;
   step(r, input, track, TUNING.LANE_TWEEN_S + 0.06);
-  check('runner: swipe right returns to center', r.lane === 0 && Math.abs(r.x) < 1e-3);
+  check('runner: double swipe crosses two lanes', r.lane === 1);
+
+  input.vert = 1;
+  step(r, input, track, TUNING.TIER_TWEEN_S + 0.06);
+  check('runner: swipe up floats to the high tier',
+    r.tier === 1 && Math.abs(r.y - TUNING.TIER_Y1) < 1e-3);
+  input.flip = true;
+  step(r, input, track, TUNING.TIER_TWEEN_S + 0.06);
+  check('runner: tap flips back down',
+    r.tier === 0 && Math.abs(r.y - TUNING.TIER_Y0) < 1e-3);
 }
 
 {
-  // jump clears a LOW laser; running into it dies
-  const mk = () => makeTrack([{ z: 12, lane: 0, kind: 'low' }]);
-  const r = new Runner();
-  r.reset();
-  const input = new FakeInput();
-  let died: string | null = null;
+  // pass through an open gap; crash into the pattern
+  let died = false;
   let passed = 0;
-  const ev: RunnerEvents = {
-    onDie: (c) => { died = c; },
-    onPass: () => passed++,
-  };
-  // time the jump: obstacle at z=12, speed ≈8 → jump at ~z=10.5
-  const track = mk();
-  step(r, input, track, 1.25, ev); // z ≈ 10
-  input.jump = true;
-  step(r, input, track, 1.0, ev);
-  check('runner: jump clears a low laser', r.alive && died === null && passed === 1);
+  const ev: RunnerEvents = { onDie: () => { died = true; }, onPass: () => passed++ };
+
+  const r = new Runner();
+  r.reset(); // center-low = cell 1
+  step(r, new FakeInput(), makeTrack([{ z: 12, openCells: [1] }]), 3, ev);
+  check('runner: flies through an open gap', r.alive && !died && passed === 1);
 
   const r2 = new Runner();
   r2.reset();
-  died = null;
-  step(r2, new FakeInput(), mk(), 3, ev);
-  check('runner: running into a low laser kills', !r2.alive && died === 'laser');
+  step(r2, new FakeInput(), makeTrack([{ z: 12, openCells: [0, 5] }]), 3, ev);
+  check('runner: hits the sealed pattern and shatters', !r2.alive && died);
 }
 
 {
-  // roll clears a HIGH bar; jumping into it dies
-  const mk = () => makeTrack([{ z: 12, lane: 0, kind: 'high' }]);
-  let died: string | null = null;
-  const ev: RunnerEvents = { onDie: (c) => { died = c; } };
-
+  // dodging: move to the gap in time (lane, then tier)
+  let died = false;
+  const ev: RunnerEvents = { onDie: () => { died = true; } };
   const r = new Runner();
   r.reset();
   const input = new FakeInput();
-  const track = mk();
-  step(r, input, track, 1.3, ev);
-  input.roll = true;
-  step(r, input, track, 1.0, ev);
-  check('runner: roll clears a hanging laser', r.alive && died === null);
+  const track = makeTrack([{ z: 12, openCells: [2] }]); // right-low
+  step(r, input, track, 0.6, ev);
+  input.lane = 1;
+  step(r, input, track, 2, ev);
+  check('runner: lane swipe reaches the gap', r.alive && !died);
 
   const r2 = new Runner();
   r2.reset();
   const in2 = new FakeInput();
-  const t2 = mk();
-  died = null;
-  step(r2, in2, t2, 1.32, ev);
-  in2.jump = true; // jumping INTO the curtain — head height stays in the beam
-  step(r2, in2, t2, 1.0, ev);
-  check('runner: jumping into a hanging laser kills', !r2.alive && died === 'laser');
+  const t2 = makeTrack([{ z: 12, openCells: [4] }]); // center-high
+  step(r2, in2, t2, 0.6, ev);
+  in2.vert = 1;
+  step(r2, in2, t2, 2, ev);
+  check('runner: float up reaches the high gap', r2.alive && !died);
 }
 
 {
-  // gates kill in-lane regardless of action; dodging works
-  const mkGate = () => makeTrack([{ z: 12, lane: 0, kind: 'gate' }]);
-  let died: string | null = null;
-  const ev: RunnerEvents = { onDie: (c) => { died = c; } };
-
+  // mid-tween between cells is NOT safe (commit to a gap)
+  let died = false;
   const r = new Runner();
   r.reset();
   const input = new FakeInput();
-  const track = mkGate();
-  step(r, input, track, 1.3, ev);
-  input.jump = true;
-  step(r, input, track, 1.0, ev);
-  check('runner: gates cannot be jumped', !r.alive && died === 'gate');
-
-  const r2 = new Runner();
-  r2.reset();
-  const in2 = new FakeInput();
-  const t2 = mkGate();
-  died = null;
-  let close = false;
-  const ev2: RunnerEvents = { onDie: (c) => { died = c; }, onPass: (cc) => { close = cc; } };
-  step(r2, in2, t2, 0.6, ev2);
-  in2.lane = 1;
-  step(r2, in2, t2, 2, ev2);
-  check('runner: lane change dodges a gate (and counts the close call)',
-    r2.alive && died === null && close);
+  // gap at right-low; swipe way too late — the tween is mid-flight
+  const track = makeTrack([{ z: 10, openCells: [2] }]);
+  step(r, input, track, 10 / TUNING.RUN_SPEED0 - 0.05, { onDie: () => { died = true; } });
+  input.lane = 1;
+  step(r, input, track, 0.5, { onDie: () => { died = true; } });
+  check('runner: swiping too late still crashes', !r.alive && died);
 }
 
 {
-  // coins: collected in-lane, missed from another lane
+  // coins: collected in the flight cell, missed elsewhere
   const r = new Runner();
   r.reset();
   const input = new FakeInput();
-  const track = makeTrack([], [{ z: 10, lane: 0 }, { z: 14, lane: 1 }]);
+  const track = makeTrack([], [{ z: 10, cell: 1 }, { z: 14, cell: 5 }]);
   let got = 0;
   step(r, input, track, 3, { onCoin: (n) => { got += n; } });
-  check('runner: collects coins in its lane, not others', got === 1);
+  check('runner: collects coins in its cell, not others', got === 1);
 }
 
 {

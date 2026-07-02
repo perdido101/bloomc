@@ -1,49 +1,39 @@
 import { Container, Graphics } from 'pixi.js';
 
 /**
- * The light-runner, seen from behind — a wraith of living light sprinting
- * into the kaleidoscope. Everything is drawn with bezier curves: a flowing
- * cloak that ripples with the stride, a pointed cowl, ribbon trails
- * streaming off the shoulders, sinuous light-legs. Layered glow discipline
- * (dark silhouette → palette aura → white-hot core) keeps it readable over
- * ANY generated palette, and the post chain's ink mode inverts it into a
- * brushed-ink figure automatically.
+ * The cat of light, seen from behind — gliding down the kaleidoscope.
+ * All curves: a round head crowned with two pointed ears (inner glow),
+ * a teardrop body, tucked hind paws, and a long tail that sways in an
+ * animated S-curve. Layered glow discipline (dark silhouette → palette
+ * aura → white-hot accents) keeps it readable over ANY generated
+ * palette; ink mode inverts it into a brushed-ink cat automatically.
  *
- * Poses: run (legs pump, cloak ripples), jump (tuck, cloak flares),
- * roll (a spinning comma of light), lane lean (whole body banks).
+ * It banks into lane changes, pitches and stretches when floating up or
+ * down, and its tail counter-sways like a rudder.
  */
 
-export type RunnerPose = 'run' | 'jump' | 'roll';
-
 export interface RunnerPoseIn {
-  /** pixel coords in the square target (y down) of the runner's FEET */
+  /** pixel coords in the square target (y down) of the cat's CENTER */
   px: number;
   py: number;
-  /** pixels per world unit at the runner's depth */
+  /** pixels per world unit at the cat's depth */
   k: number;
-  /** height above floor, world units */
-  y: number;
-  /** signed lean from lane changes */
+  /** signed bank from lane changes */
   lean: number;
-  pose: RunnerPose;
-  /** stride phase 0..1 (from distance run) */
-  stride: number;
-  /** roll progress 0..1 */
-  rollP: number;
-  /** jump progress 0..1 */
-  jumpP: number;
+  /** signed vertical velocity (float up/down) */
+  vy: number;
 }
 
 export class RunnerVisual {
   root = new Container();
   /** live palette accent (0..1 floats), fed from the LUT each frame */
   readonly glowColor = new Float32Array([0.6, 0.9, 1.0]);
-  private shadow = new Graphics();
+  private aura = new Graphics();
   private body = new Graphics();
   private visT = 0;
 
   constructor() {
-    this.root.addChild(this.shadow, this.body);
+    this.root.addChild(this.aura, this.body);
   }
 
   reset(): void {
@@ -64,145 +54,117 @@ export class RunnerVisual {
     if (!this.root.visible) return;
 
     const g = this.body;
-    const sh = this.shadow;
+    const au = this.aura;
     g.clear();
-    sh.clear();
+    au.clear();
 
-    const h = p.k * 1.6;            // standing height in px
+    const h = p.k * 1.15;           // cat height in px
     const glow = this.glowRGB(1);
     const glowHot = this.glowRGB(1.35);
     const dark = 0x05060d;
-    const cyc = p.stride * Math.PI * 2; // one full stride cycle
+    const lean = Math.max(-0.5, Math.min(0.5, p.lean * 0.14));
+    const pitch = Math.max(-0.5, Math.min(0.5, p.vy * 0.10));
 
-    // ---- floor shadow / light pool (reads jump height) ----
-    const shScale = 1 / (1 + p.y * 0.55);
-    sh.ellipse(p.px, p.py, h * 0.30 * shScale, h * 0.08 * shScale)
-      .fill({ color: 0x000000, alpha: 0.2 * shScale });
-    sh.ellipse(p.px, p.py, h * 0.48 * shScale, h * 0.13 * shScale)
-      .fill({ color: glow, alpha: 0.15 * shScale });
+    // gentle hover bob
+    const bob = Math.sin(time * 2.6) * h * 0.05;
+    const cx = p.px;
+    const cy = p.py + bob;
+    // shear by height for the bank; stretch a touch when climbing
+    const lx = (t: number) => cx + lean * h * (t - 0.3);
+    const stretch = 1 + Math.abs(pitch) * 0.25;
 
-    // feet-anchor rises with jumps; a soft bob rides the stride
-    const bob = p.pose === 'run' ? Math.abs(Math.sin(cyc)) * h * 0.035 : 0;
-    const fy = p.py - p.y * p.k - bob;
+    const rumpY = cy + h * 0.42;
+    const headY = cy - h * (0.34 * stretch) + pitch * h * 0.2;
+    const headR = h * 0.28;
+    const bodyW = h * 0.40;
 
-    if (p.pose === 'roll') {
-      // a spinning comma of light hugging the floor
-      const r = h * 0.26;
-      const cy = p.py - r;
-      const a0 = p.rollP * Math.PI * 4;
-      g.circle(p.px, cy, r * 1.5).fill({ color: glow, alpha: 0.16 });
-      g.circle(p.px, cy, r).fill({ color: dark, alpha: 0.92 })
-        .stroke({ color: glow, alpha: 0.9, width: Math.max(1.5, h * 0.05) });
-      g.arc(p.px, cy, r * 0.62, a0, a0 + 1.9)
-        .stroke({ color: glowHot, alpha: 0.9, width: Math.max(1.5, h * 0.05) });
-      g.arc(p.px, cy, r * 0.3, a0 + 2.5, a0 + 4.1)
-        .stroke({ color: 0xffffff, alpha: 0.95, width: Math.max(1, h * 0.035) });
-      g.moveTo(p.px - r * 1.6, cy + r * 0.5).lineTo(p.px - r * 0.4, cy + r * 0.5)
-        .moveTo(p.px - r * 1.3, cy - r * 0.2).lineTo(p.px - r * 0.2, cy - r * 0.2)
-        .stroke({ color: glow, alpha: 0.5, width: Math.max(1, h * 0.03) });
-      return;
-    }
+    // ---- aura: the cat carries its own light ----
+    au.ellipse(cx, cy, h * 0.85, h * 0.95).fill({ color: glow, alpha: 0.10 });
+    au.ellipse(cx, cy, h * 0.55, h * 0.62).fill({ color: glow, alpha: 0.10 });
 
-    const lean = Math.max(-0.45, Math.min(0.45, p.lean * 0.16));
-    const jump = p.pose === 'jump';
-    const tuck = jump ? 0.88 + 0.12 * Math.abs(1 - p.jumpP * 2) : 1;
-    const bh = h * tuck;             // body height
-    const hipY = fy - bh * 0.46;
-    const shoY = fy - bh * 0.74;
-    const headY = fy - bh * 0.87;
-    const lx = (t: number) => p.px + lean * bh * t; // lean shear by height
-
-    // ---- legs: sinuous strokes of light, pumping with the stride ----
-    const stepA = Math.sin(cyc);
-    const stepB = Math.sin(cyc + Math.PI);
-    const legW = Math.max(1.5, bh * 0.06);
-    const drawLeg = (side: number, s: number) => {
-      const hipX = lx(0.46) + side * bh * 0.08;
-      let fx: number, fyy: number, kx: number, ky: number;
-      if (jump) {
-        kx = hipX + side * bh * 0.10;
-        ky = hipY + bh * 0.20;
-        fx = hipX - bh * 0.06 + side * bh * 0.04;
-        fyy = hipY + bh * 0.30;
-      } else {
-        kx = hipX + s * bh * 0.10;
-        ky = hipY + bh * 0.26;
-        fx = hipX + s * bh * 0.20;
-        fyy = fy - bh * 0.02 - Math.max(0, s) * bh * 0.12;
-      }
-      g.moveTo(hipX, hipY).quadraticCurveTo(kx, ky, fx, fyy)
-        .stroke({ color: glow, alpha: 0.95, width: legW, cap: 'round' });
-      g.moveTo(hipX, hipY).quadraticCurveTo(kx, ky, fx, fyy)
-        .stroke({ color: 0xffffff, alpha: 0.55, width: legW * 0.4, cap: 'round' });
-      const spark = jump ? 0.4 : Math.max(0, -s);
-      if (spark > 0.1) {
-        g.circle(fx, fyy, legW * (0.7 + spark * 0.7))
-          .fill({ color: 0xffffff, alpha: 0.45 + 0.4 * spark });
-      }
-    };
-    drawLeg(-1, stepA);
-    drawLeg(1, stepB);
-
-    // ---- ribbon trails: light streaming off the shoulders ----
-    const ribW = Math.max(1, bh * 0.028);
-    for (const side of [-1, 1]) {
-      const sx = lx(0.72) + side * bh * 0.14;
-      const w1 = Math.sin(time * 11 + side * 2.1) * bh * 0.05;
-      const w2 = Math.sin(time * 9 + side * 4.4) * bh * 0.09;
-      g.moveTo(sx, shoY + bh * 0.04)
+    // ---- tail: a long S-curve rudder, always in motion ----
+    const sway = Math.sin(time * 3.1) * h * 0.16 - lean * h * 0.9;
+    const sway2 = Math.sin(time * 3.1 + 1.2) * h * 0.12;
+    const tailBase = { x: lx(0.9) + h * 0.16, y: rumpY - h * 0.06 };
+    const tW = Math.max(2, h * 0.085);
+    for (const [w, colr, al] of [
+      [tW * 2.2, glow, 0.18],
+      [tW, glow, 0.9],
+      [tW * 0.4, 0xffffff, 0.6],
+    ] as Array<[number, number, number]>) {
+      g.moveTo(tailBase.x, tailBase.y)
         .bezierCurveTo(
-          sx + side * bh * 0.22, shoY + bh * 0.22 + w1,
-          sx + side * bh * 0.30 + w2, shoY + bh * 0.46,
-          sx + side * bh * (jump ? 0.46 : 0.34), shoY + bh * (jump ? 0.52 : 0.66) + w2
+          tailBase.x + h * 0.42, tailBase.y + h * 0.10,
+          tailBase.x + h * 0.52 + sway2, tailBase.y - h * 0.42,
+          tailBase.x + h * 0.30 + sway, tailBase.y - h * (0.72 + 0.06 * Math.sin(time * 3.1 + 2))
         )
-        .stroke({ color: glow, alpha: 0.42, width: ribW, cap: 'round' });
+        .stroke({ color: colr, alpha: al, width: w, cap: 'round' });
+    }
+    // tail-tip star
+    g.circle(tailBase.x + h * 0.30 + sway, tailBase.y - h * 0.73, tW * 0.75)
+      .fill({ color: 0xffffff, alpha: 0.85 });
+
+    // ---- body: a teardrop seen from behind ----
+    g.moveTo(lx(0.05) - headR * 0.85, headY + headR * 0.35)
+      .bezierCurveTo(
+        lx(0.35) - bodyW * 1.15, cy - h * 0.05,
+        lx(0.75) - bodyW, rumpY - h * 0.28,
+        lx(0.95) - bodyW * 0.78, rumpY
+      )
+      // rounded rump bottom
+      .quadraticCurveTo(lx(1.0), rumpY + h * 0.16, lx(0.95) + bodyW * 0.78, rumpY)
+      .bezierCurveTo(
+        lx(0.75) + bodyW, rumpY - h * 0.28,
+        lx(0.35) + bodyW * 1.15, cy - h * 0.05,
+        lx(0.05) + headR * 0.85, headY + headR * 0.35
+      )
+      .fill({ color: dark, alpha: 0.94 })
+      .stroke({ color: glow, alpha: 0.85, width: Math.max(1.5, h * 0.045), join: 'round' });
+
+    // ---- hind paws, tucked under the rump ----
+    for (const side of [-1, 1]) {
+      g.ellipse(lx(0.95) + side * bodyW * 0.5, rumpY + h * 0.06, h * 0.11, h * 0.075)
+        .fill({ color: dark, alpha: 0.95 })
+        .stroke({ color: glow, alpha: 0.75, width: Math.max(1, h * 0.028) });
     }
 
-    // ---- the cloak: one flowing bezier silhouette, hem rippling ----
-    const swy = (ph: number) => Math.sin(time * 12 + ph) * bh * 0.028 * (jump ? 2 : 1);
-    const hemY = hipY + bh * 0.08 - (jump ? bh * 0.10 : 0);
-    const hw = bh * (jump ? 0.42 : 0.30 + 0.02 * Math.sin(cyc * 2)); // hem half-width
-    const shoW = bh * 0.15;
-    const Ls = lx(0.72) - shoW;
-    const Rs = lx(0.72) + shoW;
-    g.moveTo(Ls, shoY)
-      // left side: bells outward to the hem
-      .bezierCurveTo(
-        lx(0.6) - bh * 0.26, shoY + bh * 0.16,
-        lx(0.46) - hw, hemY - bh * 0.10,
-        lx(0.44) - hw, hemY + swy(0)
-      )
-      // rippling hem: two soft scallops
-      .quadraticCurveTo(lx(0.44) - hw * 0.45, hemY + bh * 0.10 + swy(2.2), lx(0.44), hemY + bh * 0.05 + swy(4.1))
-      .quadraticCurveTo(lx(0.44) + hw * 0.45, hemY + bh * 0.11 + swy(5.6), lx(0.44) + hw, hemY + swy(1.3))
-      // right side back up to the shoulder
-      .bezierCurveTo(
-        lx(0.46) + hw, hemY - bh * 0.10,
-        lx(0.6) + bh * 0.26, shoY + bh * 0.16,
-        Rs, shoY
-      )
-      // rounded shoulders over the top
-      .quadraticCurveTo(lx(0.74), shoY - bh * 0.10, Ls, shoY)
-      .fill({ color: dark, alpha: 0.94 })
-      .stroke({ color: glow, alpha: 0.85, width: Math.max(1.5, bh * 0.042), join: 'round' });
-
-    // ---- the cowl: a pointed hood swept back by the run ----
-    const hx = lx(0.88);
-    const hr = bh * 0.115;
-    g.moveTo(hx - hr, headY + hr * 0.5)
-      .quadraticCurveTo(hx - hr * 1.05, headY - hr * 0.8, hx - hr * 0.15, headY - hr * 1.05)
-      // the tip trails behind (down-screen) and flickers
-      .quadraticCurveTo(hx + hr * 1.6, headY - hr * 1.3 + swy(3), hx + hr * 1.9, headY - hr * 0.2 + swy(6))
-      .quadraticCurveTo(hx + hr * 1.1, headY - hr * 0.1, hx + hr * 0.95, headY + hr * 0.45)
-      .quadraticCurveTo(hx, headY + hr * 1.15, hx - hr, headY + hr * 0.5)
+    // ---- head: round, with two proud ears ----
+    g.circle(lx(0.0), headY, headR)
       .fill({ color: dark, alpha: 0.96 })
-      .stroke({ color: glowHot, alpha: 0.9, width: Math.max(1.2, bh * 0.032), join: 'round' });
+      .stroke({ color: glow, alpha: 0.9, width: Math.max(1.5, h * 0.045) });
+    // ears: pointed curves with hot inner light; they flick now and then
+    const flick = Math.max(0, Math.sin(time * 0.9)) ** 24 * 0.35;
+    for (const side of [-1, 1]) {
+      const ex = lx(0.0) + side * headR * 0.62;
+      const ey = headY - headR * 0.62;
+      const tipX = ex + side * headR * (0.55 + (side > 0 ? flick : 0));
+      const tipY = ey - headR * (0.95 - (side > 0 ? flick * 0.5 : 0));
+      g.moveTo(ex - side * headR * 0.30, ey + headR * 0.12)
+        .quadraticCurveTo(ex + side * headR * 0.05, ey - headR * 0.5, tipX, tipY)
+        .quadraticCurveTo(ex + side * headR * 0.55, ey + headR * 0.05, ex + side * headR * 0.62, ey + headR * 0.35)
+        .fill({ color: dark, alpha: 0.96 })
+        .stroke({ color: glow, alpha: 0.9, width: Math.max(1.2, h * 0.038), join: 'round' });
+      // inner-ear glow
+      g.moveTo(ex, ey + headR * 0.05)
+        .quadraticCurveTo(ex + side * headR * 0.1, ey - headR * 0.32, tipX - side * headR * 0.1, tipY + headR * 0.22)
+        .stroke({ color: glowHot, alpha: 0.8, width: Math.max(1, h * 0.03), cap: 'round' });
+    }
 
-    // ---- the light heart: a small white-hot core between the shoulders ----
+    // ---- the light heart: collar spark at the neck ----
     const pulse = 1 + 0.12 * Math.sin(time * 6);
-    g.circle(lx(0.68), shoY + bh * 0.08, bh * 0.045 * pulse)
-      .fill({ color: 0xffffff, alpha: 0.85 });
-    g.circle(lx(0.68), shoY + bh * 0.08, bh * 0.10 * pulse)
-      .fill({ color: glowHot, alpha: 0.22 });
+    g.circle(lx(0.12), headY + headR * 0.95, h * 0.05 * pulse)
+      .fill({ color: 0xffffff, alpha: 0.9 });
+    g.circle(lx(0.12), headY + headR * 0.95, h * 0.11 * pulse)
+      .fill({ color: glowHot, alpha: 0.25 });
+
+    // whisker-light: two faint arcs past the head's sides (seen edge-on)
+    for (const side of [-1, 1]) {
+      g.moveTo(lx(0.0) + side * headR * 0.9, headY + headR * 0.35)
+        .quadraticCurveTo(
+          lx(0.0) + side * headR * 1.5, headY + headR * 0.45,
+          lx(0.0) + side * headR * 1.75, headY + headR * 0.7
+        )
+        .stroke({ color: glow, alpha: 0.4, width: Math.max(1, h * 0.02), cap: 'round' });
+    }
   }
 }

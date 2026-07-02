@@ -7,14 +7,14 @@ import {
   type PhaseDNA,
 } from './game/phases';
 import { TrackField, hashSeed, type WorldGen } from './game/track';
-import { Input, Runner, type CrashCause, type RunnerEvents } from './game/player';
+import { Input, Runner, type RunnerEvents } from './game/player';
 import { Scoring, saveHighScore } from './game/scoring';
 import { PaletteLut } from './render/palette';
 import { getPhaseTextures, initTextures } from './render/textures';
 import { CavePass } from './render/cave';
 import { PostChain } from './render/post';
 import { WorldLayer, project, type Cam, type Projected } from './render/world';
-import { RunnerVisual, type RunnerPose } from './render/runnerVisual';
+import { RunnerVisual } from './render/runnerVisual';
 import { Particles } from './render/particles';
 import { Hud } from './ui/hud';
 import { Menus } from './ui/menus';
@@ -114,8 +114,7 @@ class Game {
 
   private readonly runnerEvents: RunnerEvents = {
     onLane: () => audio.playSfx('skim'),
-    onJump: () => audio.playSfx('jump'),
-    onRoll: () => audio.playSfx('grab'),
+    onTier: (dir) => audio.playSfx(dir > 0 ? 'jump' : 'grab'),
     onPass: (closeCall) => {
       const pts = this.scoring.onPass(closeCall);
       audio.playSfx('land');
@@ -131,7 +130,7 @@ class Game {
       const [x, y] = this.runnerClip();
       this.particles.burst(x, y - 0.12, 14, 0.5, 0.55, 0.016, 0.65, 1, 0.9);
     },
-    onDie: (cause) => this.beginDeath(cause),
+    onDie: () => this.beginDeath(),
   };
 
   constructor() {
@@ -271,7 +270,7 @@ class Game {
     kill: () => {
       if (this.fsm.playing && this.runner.alive) {
         this.runner.alive = false;
-        this.beginDeath('gate');
+        this.beginDeath();
       }
     },
   };
@@ -282,13 +281,14 @@ class Game {
     d.score = this.scoring.score;
     d.combo = this.scoring.combo;
     d.lane = this.runner.lane;
+    d.tier = this.runner.tier;
     d.depth = this.runner.z;
     d.speed = this.runner.speed;
     d.alive = this.runner.alive;
     d.blooms = this.pm.bloomsDone;
     d.seed = this.seedStr;
     d.runTime = this.pm.runTime;
-    d.tier = this.pm.tier;
+    d.escTier = this.pm.tier;
     d.bloomIdx = this.pm.current?.index;
     d.visualLoad = this.pm.current?.visualLoad;
     d.hazContrast = this.lut.hazardContrast;
@@ -300,11 +300,7 @@ class Game {
       d.px = (this.ox + this.proj.px) / this.dpr;
       d.py = (this.oy + this.proj.py) / this.dpr;
     }
-    d.poseState = this.runnerPose();
-  }
-
-  private runnerPose(): RunnerPose {
-    return this.runner.rolling ? 'roll' : this.runner.airborne ? 'jump' : 'run';
+    d.poseState = this.runner.tier === 1 ? 'high' : 'low';
   }
 
   private computeLayout(): void {
@@ -414,8 +410,8 @@ class Game {
     }
   }
 
-  private beginDeath(cause: CrashCause): void {
-    audio.playSfx(cause === 'laser' ? 'hazard' : 'death');
+  private beginDeath(): void {
+    audio.playSfx('hazard');
     audio.playSfx('death');
     this.caSpike = 1;
     this.deathT = 0;
@@ -444,7 +440,7 @@ class Game {
 
   /** runner position in square clip space (reuses a scratch array) */
   private runnerClip(): Float32Array {
-    if (project(this.cam, this.square, this.runner.x, this.runner.y + 0.8, this.runner.z, this.proj)) {
+    if (project(this.cam, this.square, this.runner.x, this.runner.y, this.runner.z, this.proj)) {
       this.clipPos[0] = (this.proj.px / this.square) * 2 - 1;
       this.clipPos[1] = 1 - (this.proj.py / this.square) * 2;
     }
@@ -516,10 +512,11 @@ class Game {
           this.runner.update(dt, this.input, this.track, mult, this.runnerEvents);
           this.scoring.addDistance(this.runner.z - beforeZ);
         }
-        // camera leans a little toward the runner's lane — most of the
-        // lane change shows as the RUNNER moving across the screen
+        // camera leans a little toward the cat — most of the movement
+        // shows as the CAT gliding across the screen
         this.cam.x += (this.runner.x * 0.3 - this.cam.x) * (1 - Math.exp(-9 * dt));
-        this.cam.y = TUNING.CAM_H + this.runner.y * 0.22;
+        const wantY = TUNING.CAM_H + (this.runner.y - TUNING.TUNNEL_Y) * 0.25;
+        this.cam.y += (wantY - this.cam.y) * (1 - Math.exp(-9 * dt));
         this.cam.z = this.runner.z - TUNING.CAM_Z0;
       }
 
@@ -604,6 +601,11 @@ class Game {
       noiseScale: lerp(cur.noiseScale, nxt.noiseScale, mix),
       wobAmp: lerp(cur.wobble.amp, nxt.wobble.amp, mix),
       wobFreq: lerp(cur.wobble.freq, nxt.wobble.freq, mix),
+      warp: lerp(cur.warpStrength, nxt.warpStrength, mix),
+      texDrift: lerp(cur.texDriftSpeed, nxt.texDriftSpeed, mix),
+      detail: lerp(cur.flowFeedback, nxt.flowFeedback, mix) / 0.35
+        + (active.nestedKaleido ? 0.5 : 0),
+      petalSharp: 1.5 + lerp(cur.noiseScale, nxt.noiseScale, mix) * 0.8,
     });
 
     // obstacles + coins + the runner + particles, projected on top
@@ -616,20 +618,15 @@ class Game {
     if (this.lut.revision !== this.hudColorRev) {
       this.lut.colorFloatAt(0.8, this.runnerVisual.glowColor);
     }
-    if (project(this.cam, this.square, this.runner.x, 0, this.runner.z, this.proj)) {
-      const pose = this.runnerPose();
+    if (project(this.cam, this.square, this.runner.x, this.runner.y, this.runner.z, this.proj)) {
       this.runnerVisual.update(
         dtRaw,
         {
           px: this.proj.px,
           py: this.proj.py,
           k: this.proj.k,
-          y: this.runner.y,
           lean: this.runner.lean,
-          pose,
-          stride: (this.runner.z * 0.55) % 1,
-          rollP: 1 - this.runner.rollT / TUNING.ROLL_S,
-          jumpP: 1 - this.runner.jumpT / TUNING.JUMP_S,
+          vy: this.runner.vy,
         },
         this.time,
         showRunner

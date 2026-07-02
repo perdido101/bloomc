@@ -38,72 +38,75 @@ export class XorShift {
 }
 
 /**
- * The three verbs of the cave:
- *   gate — a kaleidoscope crystal wall filling one lane; change lanes.
- *   low  — a laser at shin height; jump it.
- *   high — a laser curtain hanging from the ceiling; roll under it.
+ * The flight grid: 3 lanes × 2 heights = 6 cells per ring.
+ * cell index = (lane + 1) + tier * 3  (lane −1|0|1, tier 0 low | 1 high)
  */
-export type ObKind = 'gate' | 'low' | 'high';
+export const CELLS = 6;
 
-export interface Obstacle {
-  z: number;
-  /** lane −1 | 0 | +1 */
-  lane: number;
-  kind: ObKind;
+export function cellIndex(lane: number, tier: number): number {
+  return lane + 1 + tier * 3;
+}
+
+export function cellX(cell: number): number {
+  return ((cell % 3) - 1) * TUNING.LANE_X;
+}
+
+export function cellY(cell: number): number {
+  return cell < 3 ? TUNING.TIER_Y0 : TUNING.TIER_Y1;
+}
+
+/** one move = a lane step OR a height flip */
+export function cellDist(a: number, b: number): number {
+  return Math.abs((a % 3) - (b % 3)) + Math.abs(Math.floor(a / 3) - Math.floor(b / 3));
 }
 
 export interface Coin {
   z: number;
-  lane: number;
+  cell: number;
   taken: boolean;
 }
 
-type Cell = ObKind | 'clear';
-
+/** a kaleidoscope ring: a mandala plane with GAPS (open cells) in it */
 export interface TrackEvent {
   z: number;
-  /** cells[lane+1] */
-  cells: [Cell, Cell, Cell];
-  /** the guaranteed comfortable lane through this event */
-  pathLane: number;
+  /** open[cell] = true → that cell is a gap you can fly through */
+  open: boolean[];
+  /** the guaranteed comfortable gap through this ring */
+  pathCell: number;
 }
 
-const LANES = [-1, 0, 1];
-
 /**
- * The endless cave: obstacle *events* along z, three lanes wide.
- * Fairness is constructed, not tested for: every event keeps a path lane
- * that is CLEAR (or, for full-width bars, the whole event is one action),
- * and the path lane never moves more than one lane between events —
- * so running the path never needs more than one swipe per event.
- * All generation is seeded per event index → runs replay from their seed.
+ * The endless flight: kaleidoscope rings along z, each with gaps in its
+ * pattern. Fairness is constructed, not tested for: every ring keeps an
+ * open path cell that never moves more than one move (a lane step or a
+ * height flip) between rings — so flying the path never needs more than
+ * one swipe per ring. All generation is seeded per ring index → runs
+ * replay from their seed.
  */
 export class TrackField {
   readonly seed: number;
   events: TrackEvent[] = [];
-  obstacles: Obstacle[] = [];
   coins: Coin[] = [];
 
   private nextIndex = 0;
   private nextZ: number = TUNING.RUNWAY_Z;
-  private pathLane = 0;
+  private pathCell = 1; // start center-low
 
   constructor(seed: number) {
     this.seed = seed;
   }
 
-  /** generate events until the horizon covers upToZ */
+  /** generate rings until the horizon covers upToZ */
   ensure(upToZ: number, gen: WorldGen, intensity: number): void {
     while (this.nextZ < upToZ) {
       this.generate(this.nextIndex++, gen, intensity);
     }
   }
 
-  /** drop everything the runner has left behind */
+  /** drop everything the cat has left behind */
   prune(behindZ: number): void {
     if (this.events.length && this.events[0].z < behindZ) {
       this.events = this.events.filter((e) => e.z >= behindZ);
-      this.obstacles = this.obstacles.filter((o) => o.z >= behindZ);
     }
     if (this.coins.length && this.coins[0].z < behindZ) {
       this.coins = this.coins.filter((c) => c.z >= behindZ);
@@ -118,73 +121,69 @@ export class TrackField {
     const rng = this.rng(i, 0x7f4a7c15);
     const z = this.nextZ;
 
-    // --- choose the path lane: a random walk, one step max per event ---
-    const prevPath = this.pathLane;
-    let step: number;
+    // --- walk the path gap: one move max per ring ---
+    const prev = this.pathCell;
+    const lane = (prev % 3) - 1;
+    const tier = Math.floor(prev / 3);
+    let path = prev;
+    const r = rng.next();
     if (gen.layoutStyle === 'staircase-drift') {
-      // drift: keep marching one way until a wall, then turn
-      const dir = prevPath >= 1 ? -1 : prevPath <= -1 ? 1 : rng.next() < 0.5 ? -1 : 1;
-      step = rng.next() < 0.75 ? dir : 0;
+      // drift: keep marching one way until the edge, then bounce or flip
+      const dir = lane >= 1 ? -1 : lane <= -1 ? 1 : rng.next() < 0.5 ? -1 : 1;
+      if (r < 0.6) path = cellIndex(lane + dir, tier);
+      else if (r < 0.8) path = cellIndex(lane, 1 - tier);
     } else {
-      const r = rng.next();
-      step = r < 0.42 ? 0 : r < 0.71 ? 1 : -1;
-    }
-    const path = Math.max(-1, Math.min(1, prevPath + step));
-
-    const cells: [Cell, Cell, Cell] = ['clear', 'clear', 'clear'];
-
-    // full-width action bars: one verb across all three lanes (jump or
-    // roll everyone) — classic runner beat, starts after a warm-up
-    const fullBar = i >= 6 && rng.next() < Math.min(0.22, 0.1 + gen.tier * 0.03);
-    if (fullBar) {
-      const kind: ObKind = rng.next() < 0.55 ? 'low' : 'high';
-      cells[0] = cells[1] = cells[2] = kind;
-    } else {
-      // per-lane obstacles; the path lane always stays clear
-      const ramp = Math.min(1, i / 24); // gentle opening
-      let pBlock =
-        (0.36 + gen.tier * 0.07 + (intensity - 1) * 0.1) * ramp;
-      if (i < 4) pBlock = i === 0 ? 0.35 : 0.55; // first events: 1 obstacle-ish
-      if (gen.layoutStyle === 'cluster') pBlock += 0.14;
-      pBlock = Math.min(0.9, pBlock);
-
-      const laserBias = Math.min(0.75, 0.4 * gen.hazardDensity);
-      for (const lane of LANES) {
-        if (lane === path) continue;
-        if (rng.next() >= pBlock) continue;
-        if (i < 3) {
-          cells[lane + 1] = 'low'; // opening obstacles are all jumpable
-        } else if (rng.next() < laserBias) {
-          cells[lane + 1] = rng.next() < 0.6 ? 'low' : 'high';
-        } else {
-          cells[lane + 1] = 'gate';
-        }
+      if (r < 0.38) path = prev;
+      else if (r < 0.72) {
+        const step = rng.next() < 0.5 ? -1 : 1;
+        path = cellIndex(Math.max(-1, Math.min(1, lane + step)), tier);
+      } else {
+        path = cellIndex(lane, 1 - tier);
       }
     }
 
-    const ev: TrackEvent = { z, cells, pathLane: path };
-    this.events.push(ev);
-    for (const lane of LANES) {
-      const c = cells[lane + 1];
-      if (c !== 'clear') this.obstacles.push({ z, lane, kind: c });
-    }
-    this.pathLane = path;
+    // --- how many gaps this ring keeps (fewer = harder) ---
+    const ramp = Math.min(1, i / 26);
+    let openCount =
+      4 - Math.min(2.6, (gen.tier * 0.5 + (intensity - 1) * 0.6 + i * 0.02) * ramp)
+      - (gen.hazardDensity - 1) * 0.8
+      + (1 - Math.min(1.3, Math.max(0.7, gen.gapScale))) * 1.5;
+    if (i < 3) openCount = 4;
+    if (gen.layoutStyle === 'cluster') openCount -= 0.5;
+    const n = Math.max(1, Math.min(4, Math.round(openCount + (rng.next() - 0.5))));
 
-    // --- coins: a guiding trail down the path lane toward this event ---
+    const open = new Array<boolean>(CELLS).fill(false);
+    open[path] = true;
+    // extra gaps cluster NEAR the path so choices stay readable
+    let extras = n - 1;
+    let guard = 12;
+    while (extras > 0 && guard-- > 0) {
+      const c = Math.floor(rng.next() * CELLS);
+      if (!open[c] && cellDist(c, path) <= 2) {
+        open[c] = true;
+        extras--;
+      }
+    }
+
+    const ev: TrackEvent = { z, open, pathCell: path };
+    this.events.push(ev);
+    this.pathCell = path;
+
+    // --- coins: a guiding trail toward this ring's path gap ---
     const crng = this.rng(i, 0x51ed270b);
     if (crng.next() < TUNING.COIN_ROW_CHANCE) {
-      const n = 3 + Math.floor(crng.next() * 3);
+      const count = 3 + Math.floor(crng.next() * 3);
       const spacing = 1.6;
-      const z0 = z - 4 - n * spacing;
+      const z0 = z - 4 - count * spacing;
       if (z0 > TUNING.RUNWAY_Z * 0.5 && (this.events.length < 2 ||
           z0 > this.events[this.events.length - 2].z + 2)) {
-        for (let c = 0; c < n; c++) {
-          this.coins.push({ z: z0 + c * spacing, lane: path, taken: false });
+        for (let c = 0; c < count; c++) {
+          this.coins.push({ z: z0 + c * spacing, cell: path, taken: false });
         }
       }
     }
 
-    // --- next event distance: shrinking, hard-floored at the minimum ---
+    // --- next ring distance: shrinking, hard-floored at the minimum ---
     const gap = Math.max(
       TUNING.EVENT_GAP_MIN,
       (TUNING.EVENT_GAP0 - TUNING.EVENT_GAP_SHRINK * i) *
@@ -194,22 +193,23 @@ export class TrackField {
     this.nextZ = z + gap;
   }
 
-  /** obstacles whose plane lies in (z0, z1] — the frame's crossings */
-  crossings(z0: number, z1: number): Obstacle[] {
-    const out: Obstacle[] = [];
-    for (const o of this.obstacles) {
-      if (o.z > z0 && o.z <= z1) out.push(o);
+  /** rings whose plane lies in (z0, z1] — the frame's crossings */
+  crossings(z0: number, z1: number): TrackEvent[] {
+    const out: TrackEvent[] = [];
+    for (const e of this.events) {
+      if (e.z > z0 && e.z <= z1) out.push(e);
     }
     return out;
   }
 
-  /** collect coins near (z, x); airborne runners still hoover them */
-  collectCoins(z0: number, z1: number, x: number): number {
+  /** collect coins near (z, x, y) */
+  collectCoins(z0: number, z1: number, x: number, y: number): number {
     let n = 0;
     for (const c of this.coins) {
       if (c.taken) continue;
       if (c.z < z0 - TUNING.COIN_DZ || c.z > z1 + TUNING.COIN_DZ) continue;
-      if (Math.abs(x - c.lane * TUNING.LANE_X) > TUNING.COIN_HALF_X) continue;
+      if (Math.abs(x - cellX(c.cell)) > TUNING.COIN_HALF_X) continue;
+      if (Math.abs(y - cellY(c.cell)) > TUNING.COIN_HALF_Y) continue;
       c.taken = true;
       n++;
     }

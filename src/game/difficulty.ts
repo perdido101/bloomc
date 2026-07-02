@@ -1,26 +1,26 @@
 /**
  * BLOOM — every gameplay tuning constant lives here.
- * Subway-Surfers-style endless runner inside a kaleidoscope cave:
- * 3 lanes, swipe to change lane, jump low lasers, roll under high ones.
- * Slow start, telegraphed obstacles, always a fair path.
+ * Endless flight down a living kaleidoscope: you float in space, mandala
+ * RINGS sweep toward you, each with gaps in its pattern — line up with a
+ * gap (3 lanes × 2 heights) and pass through. Slow start, always a fair
+ * path.
  */
 export const TUNING = {
-  // --- lanes & track ---
+  // --- the flight grid: 3 lanes × 2 heights ---
   LANE_X: 1.4,              // world units between lane centers
+  TIER_Y0: 0.9,             // low flight height
+  TIER_Y1: 2.55,            // high flight height
   RUN_SPEED0: 8.0,          // world units/s at the start
   RUN_SPEED_MAX: 21,
   RUN_ACCEL: 0.12,          // units/s gained per second (slow, fair ramp)
   LANE_TWEEN_S: 0.16,       // lane-change tween (snappy)
-  JUMP_S: 0.62,             // jump airtime
-  JUMP_H: 1.7,              // jump apex height (world units)
-  ROLL_S: 0.55,             // roll duration
-  RUNNER_H: 1.6,            // standing height (collision vs HIGH bars)
-  ROLL_H: 0.75,             // rolling height (fits under HIGH bars)
-  LOW_BAR_Y: 0.55,          // top of a LOW laser — jump above this to clear
-  HIGH_BAR_Y: 1.15,         // bottom of a HIGH laser — roll below this
-  COLLIDE_HALF_X: 0.62,     // lateral half-width for obstacle collision
+  TIER_TWEEN_S: 0.22,       // float up/down tween
+  // gap pass window around an open cell's center
+  GAP_HALF_X: 0.66,
+  GAP_HALF_Y: 0.8,
   COIN_DZ: 0.8,
   COIN_HALF_X: 0.8,
+  COIN_HALF_Y: 0.85,
 
   // --- obstacle generation (fair by construction) ---
   RUNWAY_Z: 26,             // obstacle-free opening stretch
@@ -32,11 +32,11 @@ export const TUNING = {
 
   // --- camera / projection (pseudo-3D, one-point perspective) ---
   CAM_F: 1.1,               // focal length
-  CAM_H: 2.8,               // camera height above the floor
-  CAM_Z0: 5,                // the runner's fixed depth ahead of the camera
-  VP_Y: 0.22,               // vanishing point height, clip units
-  TUNNEL_R: 3.5,            // kaleidoscope tunnel radius
-  TUNNEL_Y: 1.5,            // tunnel axis height above the floor
+  CAM_H: 2.4,               // camera height (between the two flight tiers)
+  CAM_Z0: 5,                // the cat's fixed depth ahead of the camera
+  VP_Y: 0.1,                // vanishing point height, clip units
+  TUNNEL_R: 3.6,            // kaleidoscope tunnel radius
+  TUNNEL_Y: 1.7,            // tunnel axis height (the mandala's eye)
 
   // --- touch gestures (classic runner) ---
   SWIPE_MIN_PX: 32,
