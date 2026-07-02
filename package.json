@@ -7,14 +7,15 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "esbuild scripts/physics.test.ts --bundle --format=esm --outfile=node_modules/.cache/physics.test.mjs && node node_modules/.cache/physics.test.mjs"
   },
   "dependencies": {
     "pixi.js": "^8.6.6"
   },
   "devDependencies": {
+    "playwright-core": "^1.49.1",
     "typescript": "^5.7.2",
-    "vite": "^6.0.7",
-    "playwright-core": "^1.49.1"
+    "vite": "^6.0.7"
   }
 }

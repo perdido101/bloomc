@@ -45,6 +45,8 @@ export class PaletteLut {
   private keyA = '';
   private keyB = '';
   private lastMix = -1;
+  /** bumps whenever the LUT content actually changes (cheap dirty check) */
+  revision = 0;
 
   constructor() {
     this.canvas = document.createElement('canvas');
@@ -76,6 +78,7 @@ export class PaletteLut {
     }
     this.ctx.putImageData(this.img, 0, 0);
     this.texture.source.update();
+    this.revision++;
   }
 
   /** current blended color at t∈[0,1], as CSS — for DOM/HUD tinting */

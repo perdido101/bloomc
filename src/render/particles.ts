@@ -14,9 +14,12 @@ const MAX = TUNING.PARTICLE_CAP;
 const VERT = /* glsl */ `
 in vec2 aPosition;
 in vec4 aColor;
+in vec2 aCorner;
 out vec4 vColor;
+out vec2 vCorner;
 void main() {
   vColor = aColor;
+  vCorner = aCorner;
   gl_Position = vec4(aPosition, 0.0, 1.0);
 }
 `;
@@ -24,9 +27,12 @@ void main() {
 const FRAG = /* glsl */ `
 precision mediump float;
 in vec4 vColor;
+in vec2 vCorner;
 out vec4 finalColor;
 void main() {
-  finalColor = vec4(vColor.rgb * vColor.a, 0.0);
+  float d2 = dot(vCorner, vCorner);
+  float glow = exp(-d2 * 3.5) - 0.03;
+  finalColor = vec4(vColor.rgb * vColor.a * max(glow, 0.0), 0.0);
 }
 `;
 
@@ -51,14 +57,17 @@ export class Particles {
     this.pos = new Float32Array(MAX * 8);
     this.col = new Float32Array(MAX * 16);
     const idx = new Uint32Array(MAX * 6);
+    const corners = new Float32Array(MAX * 8);
     for (let i = 0; i < MAX; i++) {
       const v = i * 4;
       idx.set([v, v + 1, v + 2, v, v + 2, v + 3], i * 6);
+      corners.set([-1, -1, 1, -1, 1, 1, -1, 1], i * 8);
     }
     const geom = new Geometry({
       attributes: {
         aPosition: { buffer: this.pos, format: 'float32x2' },
         aColor: { buffer: this.col, format: 'float32x4' },
+        aCorner: { buffer: corners, format: 'float32x2' },
       },
       indexBuffer: idx,
     });

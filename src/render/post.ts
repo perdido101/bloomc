@@ -79,7 +79,7 @@ void main() {
   col.g = texture(uScene, zuv).g;
   col.b = texture(uScene, zuv - dir * ca).b;
 
-  col += (texture(uB1, zuv).rgb * 0.8 + texture(uB2, zuv).rgb * 1.0) * uParams.y;
+  col += (texture(uB1, zuv).rgb * 0.65 + texture(uB2, zuv).rgb * 0.85) * uParams.y;
 
   // symmetric shockwave ripple (dash / new-best)
   if (uFx.y > 0.001) {
@@ -180,7 +180,7 @@ export class PostChain {
       breathe: number;
       zoomCx: number;
       zoomCy: number;
-      vigColor: [number, number, number];
+      vigColor: ArrayLike<number>;
       reduceFlash: boolean;
     }
   ): void {

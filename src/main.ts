@@ -80,6 +80,9 @@ class Game {
   private deathCx = 0.5;
   private deathCy = 0.5;
   private newBestPending = false;
+  private vigStops: string[] | null = null;
+  private readonly vigColor = new Float32Array(3);
+  private hudColorRev = -1;
 
   // attract mode
   private attractDepth = 30;
@@ -104,28 +107,28 @@ class Game {
       audio.playSfx('dash');
       this.caSpike = 1;
       this.ripple = Math.max(this.ripple, 0.55);
-      const [x, y] = this.shardClipPos();
-      this.particles.burst(x, y, 26, 0.9, 0.5, 0.012, 0.7, 0.9, 1);
+      const sp = this.shardClipPos();
+      this.particles.burst(sp[0], sp[1], 26, 0.9, 0.5, 0.02, 0.7, 0.9, 1);
     },
     onLand: (k) => {
       const gained = this.scoring.onLand(k);
       audio.playSfx('land');
-      const [x, y] = this.shardClipPos();
-      this.particles.burst(x, y, gained > 0 ? 14 : 8, 0.4, 0.45, 0.009, 0.85, 0.95, 1);
+      const sp = this.shardClipPos();
+      this.particles.burst(sp[0], sp[1], gained > 0 ? 14 : 8, 0.4, 0.45, 0.016, 0.85, 0.95, 1);
       this.shardVisual.flash = 0.7;
     },
     onLeave: (dur) => {
       if (this.scoring.onLeave(dur)) {
         audio.playSfx('skim');
-        const [x, y] = this.shardClipPos();
-        this.particles.burst(x, y, 18, 0.7, 0.55, 0.011, 1, 0.9, 0.6);
+        const sp = this.shardClipPos();
+        this.particles.burst(sp[0], sp[1], 18, 0.7, 0.55, 0.018, 1, 0.9, 0.6);
       }
     },
     onMote: (n) => {
       this.scoring.onMote(n);
       audio.playSfx('mote');
-      const [x, y] = this.shardClipPos();
-      this.particles.burst(x, y, 16, 0.5, 0.6, 0.010, 0.65, 1, 0.9);
+      const sp = this.shardClipPos();
+      this.particles.burst(sp[0], sp[1], 16, 0.5, 0.6, 0.017, 0.65, 1, 0.9);
     },
     onDie: (cause) => this.beginDeath(cause),
   };
@@ -227,7 +230,20 @@ class Game {
     (window as unknown as { __vortika: object }).__vortika = this.debug;
   }
 
-  private readonly debug: Record<string, unknown> = {};
+  private readonly debug: Record<string, unknown> = {
+    // test hooks (no-ops unless invoked from the console/harness)
+    warpToBloom: () => {
+      if (this.fsm.playing) {
+        this.pm.runTime = TUNING.BLOOM_PERIOD_S * (this.pm.bloomsDone + 1) - 0.5;
+      }
+    },
+    kill: () => {
+      if (this.fsm.playing && this.shard.alive) {
+        this.shard.alive = false;
+        this.beginDeath('fall');
+      }
+    },
+  };
 
   private updateDebug(): void {
     const d = this.debug;
@@ -288,8 +304,7 @@ class Game {
 
   private onResize(): void {
     this.dpr = Math.min(2, window.devicePixelRatio || 1);
-    this.renderer.resolution = this.dpr;
-    this.renderer.resize(window.innerWidth, window.innerHeight);
+    this.renderer.resize(window.innerWidth, window.innerHeight, this.dpr);
     this.pipeline.destroy();
     this.computeLayout();
     this.buildPipeline();
@@ -338,7 +353,9 @@ class Game {
     audio.playSfx('death');
     this.caSpike = 1;
     this.deathT = 0;
-    const [x, y] = this.shardClipPos();
+    const sp = this.shardClipPos();
+    const x = sp[0];
+    const y = sp[1];
     this.deathCx = x * 0.5 + 0.5;
     this.deathCy = y * 0.5 + 0.5;
     // shatter into mirrored fragments, absorbed into the mandala
@@ -349,7 +366,7 @@ class Game {
       const a = baseA + (m * TWO_PI) / n;
       const fx = Math.cos(a) * r;
       const fy = Math.sin(a) * r;
-      this.particles.burst(fx, fy, 10, 0.6, 1.6, 0.014, 1, 0.95, 0.9, 2.2);
+      this.particles.burst(fx, fy, 10, 0.6, 1.6, 0.022, 1, 0.95, 0.9, 2.2);
     }
     this.fsm.set(GameState.DEATH);
   }
@@ -365,10 +382,15 @@ class Game {
     this.fsm.set(GameState.GAMEOVER);
   }
 
-  private shardClipPos(): [number, number] {
+  private readonly shardPos = new Float32Array(2);
+
+  /** shard position in square clip space (reuses a scratch array) */
+  private shardClipPos(): Float32Array {
     const sN = this.mapDepth(this.shard.depth);
     const a = this.shard.theta + this.viewRot;
-    return [sN * Math.cos(a), sN * Math.sin(a)];
+    this.shardPos[0] = sN * Math.cos(a);
+    this.shardPos[1] = sN * Math.sin(a);
+    return this.shardPos;
   }
 
   private readonly tick = (now: number): void => {
@@ -487,7 +509,9 @@ class Game {
 
     // player pass: shard + trail + particles, unmirrored, on top
     const showShard = (this.fsm.playing && this.shard.alive) && !this.paused;
-    const [sx, sy] = this.shardClipPos();
+    const sp = this.shardClipPos();
+    const sx = sp[0];
+    const sy = sp[1];
     const ddx = sx - this.prevShardX;
     const ddy = sy - this.prevShardY;
     const speed = Math.hypot(ddx, ddy) / Math.max(dtRaw, 1e-4);
@@ -499,7 +523,14 @@ class Game {
     this.particles.update(dt);
     r.render({ container: p.playerLayer, target: p.sceneRT, clear: false });
 
-    const vig = midColor(mix < 0.5 ? phase.stops : nextPhase.stops);
+    const vigStops = mix < 0.5 ? phase.stops : nextPhase.stops;
+    if (vigStops !== this.vigStops) {
+      this.vigStops = vigStops;
+      const c = midColor(vigStops);
+      this.vigColor[0] = c[0];
+      this.vigColor[1] = c[1];
+      this.vigColor[2] = c[2];
+    }
     p.post.render(r, {
       screenW: this.pw,
       screenH: this.ph,
@@ -512,14 +543,17 @@ class Game {
       breathe: Math.sin((this.time * TWO_PI) / 6),
       zoomCx: this.deathCx,
       zoomCy: this.deathCy,
-      vigColor: vig,
+      vigColor: this.vigColor,
       reduceFlash: this.menus.settings.reduceFlash,
     });
 
     // HUD on top (screen space)
     this.hud.root.visible = this.fsm.playing || this.fsm.is(GameState.DEATH);
     if (this.hud.root.visible) {
-      this.hud.setColor(this.lut.colorAt(0.78));
+      if (this.lut.revision !== this.hudColorRev) {
+        this.hudColorRev = this.lut.revision;
+        this.hud.setColor(this.lut.colorAt(0.78));
+      }
       this.hud.update(
         dt,
         this.scoring.score,

@@ -24,6 +24,10 @@
       gap: 3vh; text-align: center; pointer-events: auto;
     }
     .panel.show { display: flex; }
+    #title.show, #gameover.show {
+      background: radial-gradient(circle at 50% 50%,
+        rgba(3, 5, 14, 0.62) 0%, rgba(3, 5, 14, 0.38) 55%, rgba(3, 5, 14, 0.12) 100%);
+    }
 
     @keyframes breathe {
       0%, 100% { letter-spacing: 0.55em; opacity: 0.92; }

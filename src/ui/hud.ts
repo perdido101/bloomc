@@ -31,6 +31,7 @@ export class Hud {
   private cy = 0;
   private radius = 0;
   private scoreCache = -1;
+  private digitCount = 1;
   private comboCache = -1;
   private colorCache = '';
   private glyphSpin = 0;
@@ -91,11 +92,12 @@ export class Hud {
     if (score !== this.scoreCache) {
       this.scoreCache = score;
       const str = String(score);
+      this.digitCount = str.length;
       for (let i = 0; i < MAX_DIGITS; i++) {
         this.digits[i].text = i < str.length ? str[i] : '';
       }
     }
-    const nd = String(this.scoreCache).length;
+    const nd = this.digitCount;
     const step = 0.055;
     const base = this.orbit;
     for (let i = 0; i < nd; i++) {
